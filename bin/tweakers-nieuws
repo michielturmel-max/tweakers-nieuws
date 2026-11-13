@@ -1,0 +1,1620 @@
+#!/usr/bin/env bash
+# Nieuws- en feedwidget voor de Omarchy-balk.
+#
+# Bronnen staan in sources.json naast dit script. Elke bron is ofwel een
+# feed-URL, ofwel een YouTube-kanaal dat in de config als "@handle" wordt
+# genoteerd; dat laatste wordt vertaald naar het officiële kanaal-id en dan
+# naar de feed van YouTube zelf.
+#
+#   lijstmodus   tweakers-nieuws list [--source N]
+#                -> [{"url","title","lead","author","date","reacties"}, ...]
+#   bronnen      tweakers-nieuws sources
+#                -> [{"name"}, ...]
+#   artikel      tweakers-nieuws article <url>
+#                -> {"ok":1,"title","author","date","reacties",
+#                    "blocks":[{"t","x","r"}], ...}
+#
+# Alleen tekst: afbeeldingen en media worden weggelaten, want in een
+# balkpaneel zijn ze detailverliezend en zwaar.
+
+set -uo pipefail
+
+MODE=list
+COUNT=5
+MIN_INTERVAL=60
+FORMAT=json
+FORCE=0
+SOURCE=0
+ARTICLE_URL=""
+ARTICLE_TTL=86400
+YT_TTL=2592000
+SEARCH_TERM=""
+
+while [ $# -gt 0 ]; do
+	case "$1" in
+	sources)
+		MODE=sources
+		shift
+		;;
+	article)
+		MODE=article
+		ARTICLE_URL="${2:-}"
+		shift 2
+		;;
+	opslaan)
+		MODE=opslaan
+		ARTICLE_URL="${2:-}"
+		shift 2
+		;;
+	archief-zoek)
+		MODE=archief_zoek
+		SEARCH_TERM="${2:-}"
+		shift 2
+		;;
+	set)
+		MODE=set
+		SET_INDEX="${2:-}"
+		SET_KEY="${3:-}"
+		SET_VALUE="${4:-}"
+		while [ $# -gt 0 ]; do shift; done
+		;;
+	add)
+		MODE=add
+		SET_VALUE="${2:-}"
+		SET_KEY="${3:-}"
+		while [ $# -gt 0 ]; do shift; done
+		;;
+	remove)
+		MODE=remove
+		SET_INDEX="${2:-}"
+		while [ $# -gt 0 ]; do shift; done
+		;;
+	move)
+		MODE=move
+		SET_INDEX="${2:-}"
+		SET_KEY="${3:-}"
+		while [ $# -gt 0 ]; do shift; done
+		;;
+	search)
+		MODE=search
+		SEARCH_TERM="${2:-}"
+		while [ $# -gt 0 ]; do shift; done
+		;;
+	prik)
+		MODE=prik
+		shift
+		;;
+	list) MODE=list; shift ;;
+	--source) SOURCE="${2:-0}"; shift 2 ;;
+	--count) COUNT="${2:-5}"; shift 2 ;;
+	--min-interval) MIN_INTERVAL="${2:-60}"; shift 2 ;;
+	--lines) FORMAT=lines; shift ;;
+	--force) FORCE=1; shift ;;
+	*) shift ;;
+	esac
+done
+
+# Bronnen horen in de pluginroot, naast manifest.json, niet naast het script.
+BIN_DIR=$(cd -- "$(dirname -- "$0")" && pwd)
+PLUGIN_DIR=$(dirname -- "$BIN_DIR")
+SOURCES_FILE="$PLUGIN_DIR/sources.json"
+CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/tweakers-nieuws"
+ARCHIVE_FILE="${XDG_DATA_HOME:-$HOME/.local/share}/tweakers-nieuws/artikel-archief.md"
+JAR="$CACHE_DIR/cookies"
+mkdir -p "$CACHE_DIR" || exit 1
+
+UA="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+# DPG toont het artikel wél aan zoekmachines; sommige sites (nu.nl) hebben
+# geen tweakers-stijl bevestigingslink en eisen deze omweg.
+BOT_UA="Mozilla/5.0 (compatible; bingbot/2.0; +http://www.bing.com/bingbot.htm)"
+YT_FEED="https://www.youtube.com/feeds/videos.xml"
+
+article_fail() {
+	printf 'artikel ophalen mislukt: %s\n' "$1"
+	exit 1
+}
+
+fail() {
+	printf 'nieuws ophalen mislukt: %s\n' "$1"
+	exit 1
+}
+
+# ---------------------------------------------------------------- bronnen
+
+# Bij de eerste start schrijven we drie voorbeeldbronnen weg, zodat de widget
+# direct iets te tonen heeft en het bestand bestaat om in te editen.
+default_sources() {
+	cat <<'JSON'
+{
+  "sources": [
+    { "name": "Tweakers", "url": "https://tweakers.net/feeds/nieuws.xml" },
+    { "name": "Tweakers TV", "youtube": "@tweakers" },
+    { "name": "Lobsters", "url": "https://lobste.rs/rss" }
+  ]
+}
+JSON
+}
+
+[ -s "$SOURCES_FILE" ] || default_sources > "$SOURCES_FILE" 2>/dev/null
+
+# Bronrecords uit sources.json, één per regel.
+#
+# Het splitten gebeurt met een teller die accolades en aanhalingstekens volgt
+# in plaats van met \{.*?}: die breekt zodra een waarde zelf een accolade
+# bevat, en juist de waarde die de gebruiker intypt is de onbetrouwbare.
+source_records() {
+	perl -0777 -e '
+		my $path = $ARGV[0];
+		open my $fh, "<", $path or exit 0;
+		local $/;
+		my $h = <$fh>;
+
+		my ($arr) = $h =~ m{"sources"\s*:\s*\[(.*)\]}s;
+		exit 0 if not defined $arr;
+
+		# Let op: @out en de tellers los declareren. In een gemengde
+		# lijsttoewijzing zou ((), 0, -1, 0, 0) de vier getallen aan @out
+		# geven en de tellers op undef laten staan.
+		my @out;
+		my ($depth, $start, $instr, $esc) = (0, -1, 0, 0);
+		for (my $i = 0; $i < length($arr); $i++) {
+			my $c = substr($arr, $i, 1);
+
+			if ($instr) {
+				$esc = 0     if $esc;
+				$esc = 1     if !$esc and $c eq "\\";
+				$instr = 0   if !$esc and $c eq q{"};
+				next;
+			}
+
+			if    ($c eq q{"}) { $instr = 1 }
+			elsif ($c eq "{")  { $depth++; $start = $i if $depth == 1 }
+			elsif ($c eq "}")  {
+				$depth--;
+				if ($depth == 0) {
+					my $rec = substr($arr, $start, $i - $start + 1);
+					# Regelbreuken buiten aanhalingstekens eruit halen, zodat
+					# één record per regel uitkomt.
+					$rec =~ s/[\r\n]+/ /g;
+					push @out, $rec;
+					$start = -1;
+				}
+			}
+		}
+
+		print "$_\n" for @out;
+	' "${1:-$SOURCES_FILE}" 2>/dev/null
+}
+
+# Haal één veld uit het N-e bronrecord van een opgegeven bestand.
+#
+# Perl draait hier met -e en leest zelf STDIN, niet met -n: met -n zou perl de
+# argumenten als bestandsnamen proberen te openen, en "0" is geen bestand.
+source_field_on() {
+	local file="$1" index="$2" field="$3"
+	[ -s "$file" ] || return 0
+	source_records "$file" | perl -e '
+		my ($i, $f) = ($ARGV[0], $ARGV[1]);
+
+		my $n = 0;
+		while (my $line = <STDIN>) {
+			if ($n == $i) {
+				if ($line =~ m{"\Q$f\E"\s*:\s*"((?:[^"\\]|\\.)*)"}) {
+					my $v = $1;
+					$v =~ s{\\/}{/}g;
+					$v =~ s/\\"/"/g;
+					print $v;
+				}
+				last;
+			}
+			$n++;
+		}
+	' "$index" "$field"
+}
+
+source_field() {
+	source_field_on "$SOURCES_FILE" "$1" "$2"
+}
+
+load_sources() {
+	# Naam en site per bron; de paneelcode tekent de tabs en opent met "o" de
+	# bijbehorende site. Het bewerkbare veld gaat mee zodat het paneel weet
+	# of je een kanaalnaam of een feed-URL moet typen.
+	source_records | perl -e '
+		sub json {
+			my ($t) = @_;
+			$t = "" if not defined $t;
+			$t =~ s/\\/\\\\/g;
+			$t =~ s/"/\\"/g;
+			return $t;
+		}
+
+		sub val {
+			my ($r, $k) = @_;
+			return "" if $r !~ m{"\Q$k\E"\s*:\s*"((?:[^"\\]|\\.)*)"};
+			my $v = $1;
+			$v =~ s{\\/}{/}g;
+			$v =~ s/\\"/"/g;
+			return $v;
+		}
+
+		my @out;
+		while (<STDIN>) {
+			my $r = $_;
+			my $name = val($r, "name");
+
+			# De site is iets om te openen, niet de feed zelf: voor een
+			# kanaal het kanaal, voor een feed alleen het domein.
+			my ($site, $key, $value) = ("", "", "");
+			if ((my $h = val($r, "youtube")) ne "") {
+				$h =~ s/^\@//;
+				$site = "https://www.youtube.com/\@" . $h;
+				$key = "youtube";
+				$value = "\@" . $h;
+			}
+			elsif ((my $u = val($r, "url")) ne "") {
+				$site = ($u =~ m{^(https?://[^/]+)}) ? $1 : $u;
+				$key = "url";
+				$value = $u;
+			}
+
+			push @out, qq({"name":"@{[json($name)]}","site":"@{[json($site)]}","key":"@{[json($key)]}","value":"@{[json($value)]}"});
+		}
+		print "[", join(",", @out), "]\n";
+	' 2>/dev/null
+}
+
+# Aantal geconfigureerde bronnen, zodat de paneelcode weet hoeveel tabs er
+# getekend moeten worden.
+sources_count() {
+	source_records | grep -c . | tr -d ' '
+}
+
+# Gedeelde editor voor sources.json. Bewerkingen (set/add/remove/move)
+# draaien in één perl die de array opknipt in afzonderlijke records en de
+# gewijzigde lijst naar sources.json.nieuw schrijft; pas als de kandidaat
+# gecontroleerd is, mag hij het origineel vervangen.
+#
+# Bewerkingen:
+#   OP=set    I=<index> K=<url|youtube|name> V=<waarde>
+#   OP=add    K=<url|youtube> V=<waarde> NAME=<naam>
+#   OP=remove I=<index>
+#   OP=move   I=<index> DST=<doelindex>
+#
+# Let op: in dit enkele-aanhalingsteken-blok mag zelf geen apostrof staan.
+SOURCES_EDIT_PERL='
+	sub escv {
+		my ($s) = @_;
+		$s = "" if not defined $s;
+		$s =~ s/\\/\\\\/g;
+		$s =~ s/"/\\"/g;
+		return $s;
+	}
+
+	my $file = $ARGV[0];
+	open my $fh, "<", $file or die "kon $file niet lezen\n";
+	local $/;
+	my $h = <$fh>;
+	close $fh;
+
+	my ($arr) = $h =~ m{"sources"\s*:\s*\[(.*)\]}s;
+	die "geen sources-array gevonden\n" if not defined $arr;
+
+	# Let op: @out en de tellers los declareren. In een gemengde
+	# lijsttoewijzing zou ((), 0, -1, 0, 0) de vier getallen aan @out
+	# geven en de tellers op undef laten staan.
+	my @out;
+	my ($depth, $start, $instr, $esc) = (0, -1, 0, 0);
+	for my $pos (0 .. length($arr) - 1) {
+		my $c = substr($arr, $pos, 1);
+		if ($instr) {
+			$esc = 0   if $esc;
+			$esc = 1   if !$esc and $c eq "\\";
+			$instr = 0 if !$esc and $c eq q{"};
+			next;
+		}
+		if    ($c eq q{"}) { $instr = 1 }
+		elsif ($c eq "{")  { $depth++; $start = $pos if $depth == 1 }
+		elsif ($c eq "}")  {
+			$depth--;
+			if ($depth == 0) {
+				push @out, substr($arr, $start, $pos - $start + 1);
+				$start = -1;
+			}
+		}
+	}
+
+	my $n = scalar(@out);
+	my ($i, $k, $v) = ($ENV{I}, $ENV{K}, $ENV{V});
+	my $op = $ENV{OP};
+	die "onbekende bewerking: $op\n" if $op !~ /^(set|add|remove|move)$/;
+
+	if ($op eq "set") {
+		$i = int($i);
+		die "bron $i bestaat niet (er zijn $n)\n" if $i > $#out or $i < 0;
+		my $rec = $out[$i];
+
+		# Precies een van url en youtube: anders wint in feed_url_for
+		# altijd url en lijkt het alsof een kanaalnaam niets deed. Bij een
+		# naamsbewerking is er maar één sleutel en die blijft gewoon staan.
+		# Bij een url/kanaal-switch telt dus niet alleen de eigen sleutel,
+		# maar ook de tegenoverliggende weg.
+		if ($k eq "url" or $k eq "youtube") {
+			$rec =~ s{,\s*"\Q$k\E"\s*:\s*"[^"]*"}{}g;
+			my $other = ($k eq "url") ? "youtube" : "url";
+			$rec =~ s{,\s*"\Q$other\E"\s*:\s*"[^"]*"}{}g;
+		}
+
+		if ($rec =~ m{"\Q$k\E"\s*:\s*"[^"]*"}) {
+			my $jv = escv($v);
+			$rec =~ s{"\Q$k\E"\s*:\s*"[^"]*"}{"$k":"$jv"};
+		}
+		else {
+			# Veld toevoegen, vlak voor de laatste sluitaccolade. Met een
+			# regex lukt dat niet: de } in de vervanging sluit de s{}{}-
+			# scheiding en de perl dan de hele regel verkeerd af. Daarom
+			# de accolade met rindex opzoeken en overschrijven.
+			$rec =~ s/\s+\z//;
+			my $close = rindex($rec, "}");
+			die "kon het record niet aanvullen\n" if $close < 0;
+			my $jv = escv($v);
+			substr($rec, $close, 1) = ", \"" . $k . "\":\"" . $jv . "\"}";
+		}
+		$out[$i] = $rec;
+	}
+	elsif ($op eq "add") {
+		die "onbekende sleutel voor toevoegen: $k\n"
+			unless $k eq "url" or $k eq "youtube";
+		push @out, "{\"name\":\"" . escv($ENV{NAME} // "") . "\", \"$k\":\""
+			. escv($v) . "\"}";
+	}
+	elsif ($op eq "remove") {
+		$i = int($i);
+		die "bron $i bestaat niet (er zijn $n)\n" if $i > $n - 1 or $i < 0;
+		splice @out, $i, 1;
+	}
+	elsif ($op eq "move") {
+		$i = int($i);
+		my $dst = int($ENV{DST});
+		die "bron $i bestaat niet (er zijn $n)\n" if $i > $n - 1 or $i < 0;
+		die "doel $dst bestaat niet (er zijn $n)\n" if $dst > $n - 1 or $dst < 0;
+		my $rec = splice @out, $i, 1;
+		splice @out, $dst, 0, $rec;
+	}
+
+	my $body = join(",\n    ", @out);
+
+	# Terugplaatsen zonder lookbehind: perl ondersteunt geen
+	# variabele-lengte lookbehind, en "sources"\s*:\s*\[ is er een.
+	my $new = $h;
+	$new =~ s{("sources"\s*:\s*\[).*(\]\s*\})}{ $1 . $body . $2 }se;
+	die "kon het bestand niet herschrijven\n" if $new eq $h and $body ne $arr;
+
+	open my $o, ">", "$file.nieuw" or die "kon niet schrijven\n";
+	print $o $new;
+	close $o or die "kon niet sluiten\n";
+'
+
+# Draai een sources-bewerking; op fouten komt de perl-melding op stdout.
+sources_edit() {
+	OP="$1" I="$2" K="$3" V="$4" DST="$5" NAME="$6" \
+		perl -0777 -e "$SOURCES_EDIT_PERL" "$SOURCES_FILE" 2>&1
+}
+
+# Controle van de kandidaat en de definitieve verplaatsing. Alleen als de
+# controle klopt verhuizen we sources.json.nieuw over het origineel heen;
+# blijft de controle steken, dan is het oude bestand onaangeraakt.
+commit_sources() {
+	local index="$1" key="$2" value="$3" check
+	if [ -n "$key" ]; then
+		check=$(source_field_on "$SOURCES_FILE.nieuw" "$index" "$key")
+		if [ "$check" != "$value" ]; then
+			rm -f "$SOURCES_FILE.nieuw"
+			printf 'opslaan mislukt, waarde kwam niet terug\n'
+			return 1
+		fi
+	fi
+	mv -f "$SOURCES_FILE.nieuw" "$SOURCES_FILE" 2>/dev/null || {
+		rm -f "$SOURCES_FILE.nieuw"
+		printf 'opslaan mislukt, kon het bestand niet vervangen\n'
+		return 1
+	}
+	return 0
+}
+
+# Verifieer dat een bestand geldig JSON is met een sources-array.
+verify_sources_json() {
+	python3 -c '
+import json, sys
+try:
+	json.load(open(sys.argv[1]))
+except Exception as e:
+	print("kapot: %s" % e)
+	sys.exit(1)
+print("ok")
+' "$1"
+}
+
+# De tab-label mee laten bewegen met de bron. Kan de naam niet worden
+# gevonden (geen netwerk of een lege feed), dan blijft de oude naam staan.
+auto_name() {
+	local index="$1" key="$2" value="$3" newname cur
+	if [ "$key" = "youtube" ]; then
+		newname=$(channel_title "$value")
+	else
+		newname=$(feed_title "$value")
+	fi
+	if [ -n "$newname" ]; then
+		cur=$(source_field "$index" name)
+		if [ "$newname" != "$cur" ]; then
+			set_source "$index" name "$newname" 1 || return 1
+		fi
+	fi
+}
+
+# Een bron aan het eind toevoegen; de nieuwe index gaat mee als antwoord.
+add_source() {
+	local value="$1" name="${2:-}" key
+	case "$value" in
+	'' | *' '* | *"$(printf '\t')"*) printf 'ongeldige waarde: geen spaties\n'; return 1 ;;
+	esac
+	case "$value" in
+	@* | *youtube.com/*) key="youtube" ;;
+	http://* | https://*) key="url" ;;
+	*) printf 'ongeldige waarde: een @kanaal of http(s)-url\n'; return 1 ;;
+	esac
+	if [ "$key" = "youtube" ]; then
+		value=$(canon_kanaal "$value")
+	fi
+
+	local out
+	out=$(sources_edit add "" "$key" "$value" "" "$name") || { printf '%s\n' "$out"; return 1; }
+
+	local index check
+	index=$(sources_count)
+	check=$(verify_sources_json "$SOURCES_FILE.nieuw") || { rm -f "$SOURCES_FILE.nieuw"; printf '%s\n' "$check"; return 1; }
+	check=$(source_field_on "$SOURCES_FILE.nieuw" "$index" "$key")
+	if [ "$check" != "$value" ]; then
+		rm -f "$SOURCES_FILE.nieuw"
+		printf 'opslaan mislukt, bron kwam niet terug\n'
+		return 1
+	fi
+	mv -f "$SOURCES_FILE.nieuw" "$SOURCES_FILE" || {
+		rm -f "$SOURCES_FILE.nieuw"
+		printf 'opslaan mislukt, kon het bestand niet vervangen\n'
+		return 1
+	}
+
+	rm -f "$CACHE_DIR"/list-*.json
+	if [ -z "$name" ]; then
+		auto_name "$index" "$key" "$value"
+	fi
+	printf 'ok %s\n' "$index"
+}
+
+remove_source() {
+	local index="$1"
+	case "$index" in
+	'' | *[!0-9]*) printf 'ongeldige bronindex: %s\n' "$index"; return 1 ;;
+	esac
+
+	local out old new check
+	old=$(sources_count)
+	out=$(sources_edit remove "$index" "" "" "" "") || { printf '%s\n' "$out"; return 1; }
+	check=$(verify_sources_json "$SOURCES_FILE.nieuw") || { rm -f "$SOURCES_FILE.nieuw"; printf '%s\n' "$check"; return 1; }
+	new=$(source_records "$SOURCES_FILE.nieuw" | grep -c . | tr -d ' ')
+	if [ "$new" -ne $((old - 1)) ]; then
+		rm -f "$SOURCES_FILE.nieuw"
+		printf 'verwijderen mislukt\n'
+		return 1
+	fi
+	mv -f "$SOURCES_FILE.nieuw" "$SOURCES_FILE" || {
+		rm -f "$SOURCES_FILE.nieuw"
+		printf 'verwijderen mislukt, kon het bestand niet vervangen\n'
+		return 1
+	}
+
+	rm -f "$CACHE_DIR"/list-*.json
+	printf 'ok\n'
+}
+
+move_source() {
+	local index="$1" target="$2"
+	case "$index" in
+	'' | *[!0-9]*) printf 'ongeldige bronindex: %s\n' "$index"; return 1 ;;
+	esac
+	case "$target" in
+	'' | *[!0-9]*) printf 'ongeldige doelindex: %s\n' "$target"; return 1 ;;
+	esac
+
+	local out check nm nm2
+	nm=$(source_field "$index" name)
+	out=$(sources_edit move "$index" "" "" "" "$target") || { printf '%s\n' "$out"; return 1; }
+	check=$(verify_sources_json "$SOURCES_FILE.nieuw") || { rm -f "$SOURCES_FILE.nieuw"; printf '%s\n' "$check"; return 1; }
+	nm2=$(source_field_on "$SOURCES_FILE.nieuw" "$target" name)
+	if [ "$nm" != "$nm2" ]; then
+		rm -f "$SOURCES_FILE.nieuw"
+		printf 'verplaatsen mislukt\n'
+		return 1
+	fi
+	mv -f "$SOURCES_FILE.nieuw" "$SOURCES_FILE" || {
+		rm -f "$SOURCES_FILE.nieuw"
+		printf 'verplaatsen mislukt, kon het bestand niet vervangen\n'
+		return 1
+	}
+
+	rm -f "$CACHE_DIR"/list-*.json
+	printf 'ok\n'
+}
+
+# Waarde van een bronrecord wijzigen vanuit het paneel. Schrijft het bestand
+# terug in canonieke vorm en controleert daarna of de waarde op de juiste
+# plek staat; anders wordt de originele inhoud teruggezet.
+set_source() {
+	local index="$1" key="$2" value="$3" quiet="${4:-0}"
+
+	case "$index" in
+	'' | *[!0-9]*) printf 'ongeldige bronindex: %s\n' "$index"; return 1 ;;
+	esac
+	case "$key" in
+	url | youtube | name) ;;
+	*) printf 'onbekend veld: %s\n' "$key"; return 1 ;;
+	esac
+	# Een kanaalnaam of een http(s)-URL, niets anders. Zo kan een
+	# typefout geen ander soort verzoek worden, en spaties zouden de
+	# waarde in het bestand in twee argumenten uiteentrekken. Een naam
+	# mag spaties hebben ("Marques Brownlee"), dus die valt buiten deze
+	# strikte controle.
+	if [ "$key" != "name" ]; then
+		case "$value" in
+		*' '* | *"$(printf '\t')"*) printf 'ongeldige waarde: geen spaties\n'; return 1 ;;
+		esac
+		case "$value" in
+		'') printf 'lege waarde\n'; return 1 ;;
+		@*) ;;
+		[A-Za-z0-9._-]*) ;;
+		http://* | https://*) ;;
+		*) printf 'ongeldige waarde\n'; return 1 ;;
+		esac
+
+		# De sleutel volgt uit de waarde, niet uit wat de caller zegt. Een
+		# rss-bron waarin je "@mkbhd" typt moet een kanaalbron worden en
+		# geen rss-bron blijven met een tweede sleutel erbij die
+		# feed_url_for negeert: dat zou eruitzien alsof er niets gebeurde.
+		case "$value" in
+		@* | *youtube.com/*) key="youtube" ;;
+		*) key="url" ;;
+		esac
+		if [ "$key" = "youtube" ]; then
+			value=$(canon_kanaal "$value")
+		fi
+	fi
+
+	local out
+	out=$(sources_edit set "$index" "$key" "$value" "" "") || { printf '%s\n' "$out"; return 1; }
+	commit_sources "$index" "$key" "$value" || return 1
+
+	# Het kanaal-id en de lijst van de oude waarde zouden anders blijven
+	# hangen: na een andere kanaalnaam moet de lijst opnieuw.
+	rm -f "$CACHE_DIR"/list-"$index".json
+	if [ "$key" = "youtube" ]; then
+		local handle
+		handle=$(printf '%s' "$value" | tr -c 'A-Za-z0-9_-' '_')
+		rm -f "$CACHE_DIR"/yt-"$handle"
+	fi
+
+	# Naam mee laten bewegen met de bron, zodat de tab niet blijft zeggen
+	# "Tweakers TV" bij een kanaal dat iets heel anders is.
+	if [ "$key" != "name" ]; then
+		auto_name "$index" "$key" "$value" || return 1
+	fi
+
+	[ "$quiet" -eq 1 ] || printf 'ok\n'
+}
+
+# Titel van een RSS/Atom-feed, voor de tab-label. Leeg als de feed niet
+# geladen kan worden.
+feed_title() {
+	local xml title
+	xml=$(curl -sSL --max-time 15 --compressed \
+		-A "$UA" -H "Accept: application/rss+xml,application/atom+xml,application/xml" \
+		"$1" 2>/dev/null) || return 0
+	[ -n "$xml" ] || return 0
+	title=$(printf '%s' "$xml" | perl -0777 -ne '
+		my ($t);
+		($t) = m{<title[^>]*>(?:\s*<!\[CDATA\[)?\s*([^<\]][^<]*?)\s*(?:\]\]>)?\s*</title>}s;
+		$t //= "";
+		$t =~ s/\s+/ /g;
+		$t =~ s/\s+$//;
+		print $t if length($t) <= 120;
+	')
+	printf '%s' "$title"
+}
+
+# Kanaalbronnen canoniek als @handle opslaan: ook een geplakte
+# youtube.com/@…-url moet hetzelfde bewerkveld en kanaaloplossing krijgen
+# als de @handle zelf. Andere kanaal-URL's (…/channel/…) kosten een
+# andere oplossing en worden ongemoeid gelaten.
+canon_kanaal() {
+	local v="$1"
+	if [[ "$v" == *youtube.com/* ]]; then
+		local h="${v#*youtube.com/}"
+		case "$h" in
+		@*)
+			h=${h%/}
+			printf '@%s' "${h#@}"
+			return 0
+			;;
+		esac
+	fi
+	printf '%s' "$v"
+}
+
+# Titel van een YouTube-kanaal, zonder het " - YouTube"-staartje.
+channel_title() {
+	local handle="${1#@}"
+	handle="${handle#https://www.youtube.com/}"
+	handle="${handle#http://www.youtube.com/}"
+	handle="${handle#@}"
+	[ -n "$handle" ] || return 0
+	local page title
+	page=$(curl -sSL --max-time 20 --compressed \
+		-A "$UA" -b "CONSENT=YES+" -H "Accept-Language: nl-NL,nl;q=0.9" \
+		"https://www.youtube.com/@$handle" 2>/dev/null) || return 0
+	title=$(printf '%s' "$page" | grep -oP '<title>\K[^<]*' | head -1)
+	case "$title" in
+	'' | *Not\ Found* | *404* | *Error*) return 0 ;;
+	esac
+	title=${title% - YouTube}
+	title=${title% – YouTube}
+	printf '%s' "$title"
+}
+
+# YouTube-kanalen zoeken zonder API-sleutel: de zoekpagina met het
+# kanalenfilter binnenhalen (met consent-cookie zoals resolve_youtube dat al
+# doet) en de ingebedde ytInitialData door ytsearch.py laten ontleden.
+# De normalisatie naar @handle zit in de parser; de draagraket faalt ook bij
+# "geen kanalen gevonden" met een eenduidige eerste regel.
+search_youtube() {
+	local q="$1"
+	[ -n "$q" ] || { printf 'geef een zoekterm\n'; return 1; }
+	local enc
+	enc=$(python3 -c 'import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))' "$q")
+	local sp out
+	# Eerst strikt op kanalen; mist YouTube die filter (gewijzigde opmaak),
+	# dan een gewone zoekpagina waar dezelfde parser nog kanalen uit haalt.
+	for sp in "&sp=EgIQAg%3D%3D" ""; do
+		curl -sSL --max-time 25 --compressed \
+			-A "$UA" -b "CONSENT=YES+" -H "Accept-Language: nl-NL,nl;q=0.9" \
+			"https://www.youtube.com/results?search_query=$enc$sp" \
+			-o "$TMP/search.html" 2>/dev/null
+		[ -s "$TMP/search.html" ] || continue
+		out=$(python3 "$BIN_DIR/ytsearch.py" "$TMP/search.html" 2>/dev/null)
+		printf '%s' "$out" | grep -q '"ok":1' && { printf '%s\n' "$out"; return 0; }
+	done
+	[ -n "$out" ] || { printf 'kon de zoekresultaten niet ophalen\n'; return 1; }
+	printf '%s\n' "$out"
+	return 0
+}
+
+# Een zoekterm kan twee kanten op: een domein (punt, geen spatie) of een
+# URL is een nieuwssite waarvan we de RSS-feed opsporen; anders is het een
+# zoekterm voor YouTube-kanalen. Vereist dus nooit meer dan wat het script
+# al doet; drie netoproeepen voor een zoekopdracht is geen drama.
+site_or_youtube_search() {
+	local term="$1"
+	if printf '%s' "$term" | grep -qE '^https?://' ||
+		printf '%s' "$term" | grep -qE '^[^ ]+\.[A-Za-z]{2,}(\.[A-Za-z]{2,})?$'; then
+		local out
+		out=$(python3 "$BIN_DIR/sitediscover.py" "$term" 2>/dev/null)
+		case "$out" in
+		*'"ok":1'*) printf '%s\n' "$out" ;;
+		*'ziet er niet uit'*) search_youtube "$term" ;;
+		*) printf '%s\n' "$out" ;;
+		esac
+		return 0
+	fi
+	search_youtube "$term"
+}
+
+# Recente video's van een kanaal via de VideoS-tab. Het kanaal is al
+# genormaliseerd tot "@handle"; de pagina vraagt net als zoeken om de
+# CONSENT-cookie die YouTube sinds kort eist.
+channel_videos() {
+	local handle="$1" vurl out try
+	[ -n "$handle" ] || return 1
+	# De @ moet in de URL staan: voor sommige kanalen geeft youtube.com zonder
+	# @ een kale schil terug van 758 bytes in plaats van de volle pagina.
+	vurl=$(python3 -c 'import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe="@"))' "$handle")
+	out=""
+	# YouTube throttle af en toe: een kale schil (enkele KB) of een lege
+	# grid in plaats van de volle pagina. In plaats van snel driemaal te
+	# proberen en dan op te geven, wachten we met oplopende rust even en
+	# proberen we opnieuw; handmatig verversen zit daar al snel tussen.
+	local delayer index
+	for try in 1 2 3 4 5; do
+		curl -sSL --max-time 25 --compressed \
+			-A "$UA" -b "CONSENT=YES+" -H "Accept-Language: nl-NL,nl;q=0.9" \
+			"https://www.youtube.com/$vurl/videos" -o "$TMP/page.html" 2>/dev/null
+		# Een pagina van enige kilobytes is óok een schil; alleen een volle
+		# kanaalpagina (meestal enkele honderden KB) is het echte werk.
+		size=$(wc -c < "$TMP/page.html" 2>/dev/null || echo 0)
+		out=$(python3 "$BIN_DIR/ytvideos.py" "$TMP/page.html" "$COUNT" 2>/dev/null)
+		[ "$size" -ge 50000 ] && [ "$(printf '%s' "$out" | tr -d '[]' | tr -d ' ')" != "" ] && break
+		delayer=1
+		[ "$try" -gt 1 ] && delayer=$((try - 1))
+		sleep "$delayer"
+	done
+	printf '%s\n' "$out"
+}
+
+# Een @handle of kanaal-URL vertalen naar het officiële feed-adres. Het
+# kanaal-id blijft 30 dagen gecached: de kanaalpagina is 800 kB en verandert
+# zelden.
+resolve_youtube() {
+	local handle="${1#@}"
+	handle="${handle#https://www.youtube.com/}"
+	handle="${handle#http://www.youtube.com/}"
+	handle="${handle#@}"
+	[ -n "$handle" ] || { printf ''; return 1; }
+
+	local key
+	key=$(printf '%s' "$handle" | tr -c 'A-Za-z0-9_-' '_')
+	local cache="$CACHE_DIR/yt-$key"
+
+	if [ "$FORCE" -eq 0 ] && [ -s "$cache" ]; then
+		local cage=$(( $(date +%s) - $(stat -c %Y "$cache" 2>/dev/null || echo 0) ))
+		[ "$cage" -lt "$YT_TTL" ] && { cat "$cache"; return 0; }
+	fi
+
+	local id=""
+	local try
+	# YouTube serveert soms eerst een kale schil zonder kanaalgegevens; één
+	# herhaling is daarom geen luxe maar noodzaak.
+	for try in 1 2 3; do
+		curl -sSL --max-time 25 --compressed \
+			-A "$UA" -b "CONSENT=YES+" -H "Accept-Language: nl-NL,nl;q=0.9" \
+			"https://www.youtube.com/@$handle" -o "$CACHE_DIR/ytpage.html" 2>/dev/null
+		id=$(grep -oP '"externalId":"\KUC[A-Za-z0-9_-]{22}' "$CACHE_DIR/ytpage.html" 2>/dev/null | head -1)
+		[ -n "$id" ] && break
+		sleep 1
+	done
+
+	rm -f "$CACHE_DIR/ytpage.html"
+	[ -n "$id" ] || return 1
+
+	printf '%s' "$YT_FEED?channel_id=$id" > "$cache"
+	printf '%s' "$YT_FEED?channel_id=$id"
+}
+
+# Geef de feed-URL van bron $SOURCE terug, of leeg als hij niet resolveert.
+feed_url_for() {
+	local index="$1"
+	local url handle
+	url=$(source_field "$index" url)
+	handle=$(source_field "$index" youtube)
+
+	if [ -n "$url" ]; then
+		printf '%s' "$url"
+		return 0
+	fi
+	if [ -n "$handle" ]; then
+		resolve_youtube "$handle"
+		return $?
+	fi
+	return 1
+}
+
+# ------------------------------------------------------------------ curl
+
+TMP=$(mktemp -d) || exit 1
+trap 'rm -rf "$TMP"' EXIT
+
+# Consent-gate van DPG Media. Een gewone pagina vraagt eerst om toestemming;
+# de feed niet, maar de artikelpagueles wel.
+#
+# YouTube kent een eigen gate ("Voordat je verdergaat naar YouTube") die na
+# een paar verzoeken opeens verschijnt. De hele formulier-oplossing zit
+# vol verborgen velden, maar één cookie volstaat: CONSENT=YES+.
+grab_page() {
+	curl -sSL --max-time 25 --compressed \
+		-A "$UA" -c "$JAR" -b "$JAR" -b "CONSENT=YES+" \
+		-H "Accept: text/html,application/xhtml+xml" \
+		-H "Accept-Language: nl-NL,nl;q=0.9" \
+		-e "$2" -o "$TMP/page.html" "$1" 2>/dev/null
+}
+
+resolve_page() {
+	# 1) normaal laden
+	grab_page "$1" "$1"
+
+	# 2) Tweakers-stijl gate: die heeft een decodeURIComponent-bevestigingslink
+	#    in de pagina, dubbel URL-encoded. Hem eruit halen en een keer
+	#    decoderen is robuuster dan hem zelf bouwen: redirectUri blijkt een
+	#    pad te zijn, geen volledige URL, en authId en referer zitten er in
+	#    één keer in.
+	if grep -q 'privacygate' "$TMP/page.html" 2>/dev/null; then
+		local confirm
+		confirm=$(perl -0777 -ne '
+			if (m{decodeURIComponent\((?:\x27|\x22)([^\x27\x22]*privacygate-confirm[^\x27\x22]*)(?:\x27|\x22)}) {
+				my $u = $1;
+				$u =~ s/%([0-9A-Fa-f]{2})/chr(hex($1))/ge;
+				print $u;
+			}
+		' "$TMP/page.html" 2>/dev/null)
+		if [ -n "$confirm" ]; then
+			grab_page "$confirm" "$1"
+			grab_page "$1" "$1"
+		fi
+	fi
+
+	# 3) Blijft er een gate staan (consent.js-variant zoals nu.nl), dan één
+	#    poging als zoekmachine: DPG serveert het artikel aan bots.
+	if gate_left; then
+		curl -sSL --max-time 30 --compressed \
+			-A "$BOT_UA" -b "CONSENT=YES+" \
+			-H "Accept-Language: nl-NL,nl;q=0.9" \
+			-e "$1" -o "$TMP/page.html" "$1" 2>/dev/null
+	fi
+
+	gate_left && return 1
+	return 0
+}
+
+# Klopt de eerder gedownloade pagina nog steeds een privacy-gate? Een gate is
+# praktisch een lege pagina; een echt artikel is groter dan dat.
+gate_left() {
+	[ -s "$TMP/page.html" ] || return 1
+	[ "$(stat -c %s "$TMP/page.html" 2>/dev/null || echo 99999999)" -lt 50000 ] || return 1
+	grep -qiE 'privacy ?gate|consent\.js' "$TMP/page.html" 2>/dev/null
+}
+
+grab_feed() {
+	curl -sSL --max-time 25 --compressed \
+		-A "$UA" \
+		-H "Accept: application/rss+xml,application/atom+xml,application/xml" \
+		-e "https://www.tweakers.net/" \
+		-o "$TMP/feed.xml" "$1" 2>/dev/null
+}
+
+
+# ------------------------------------------------------------- artikelmodus
+
+# Volledige tekst van één item: een HTML-artikel of de beschrijving van een
+# YouTube-video. Beide komen als een lijst blokken terug, zodat de QML er
+# één scrollvenster van maakt.
+extract_article() {
+	ART_URL="$2" perl -0777 -ne '
+		my $h = $_;
+
+		my @nl = qw{januari februari maart april mei juni juli augustus september oktober november december};
+
+		sub unesc {
+			my ($t) = @_;
+			$t =~ s/&nbsp;/ /g;
+			$t =~ s/&quot;/"/g;
+			$t =~ s/&#0*39;/chr(39)/ge;
+			$t =~ s/&#x0*27;/chr(39)/ge;
+			$t =~ s/&lt;/</g;
+			$t =~ s/&gt;/>/g;
+			$t =~ s/&eacute;/chr(233)/ge;
+			$t =~ s/&amp;/&/g;
+			return $t;
+		}
+
+		sub clean {
+			my ($t) = @_;
+			return "" if not defined $t;
+			$t =~ s/<br\s*\/?>/ /gs;
+			$t = unesc($t);
+			$t =~ s/<[^>]*>//gs;
+			$t = unesc($t);
+			$t =~ s/<[^>]*>//gs;
+			$t =~ s/&[a-zA-Z#0-9]+;/ /g;
+			$t =~ s/\s+/ /g;
+			$t =~ s/^\s+|\s+$//g;
+			return $t;
+		}
+
+		sub json {
+			my ($t) = @_;
+			$t = "" if not defined $t;
+			$t =~ s/\\/\\\\/g;
+			$t =~ s/"/\\"/g;
+			$t =~ s/\x{2028}|\x{2029}//g;
+			return $t;
+		}
+
+		# Volledig JSON-ontsnappen, want YouTube levert de beschrijving als
+		# JSON-string met \n, \u-escapes en zo.
+		my %esc = ("n" => "\n", "r" => "\r", "t" => "\t", "b" => "\b", "f" => "\f", "\"" => "\"", "\\" => "\\", "/" => "/");
+		sub unjson {
+			my ($t) = @_;
+			return "" if not defined $t;
+			$t =~ s{\\(u[0-9a-fA-F]{4}|.)}{
+				my $e = $1;
+				$e =~ /^u[0-9a-fA-F]{4}$/ ? chr(hex(substr($e, 1))) : (exists $esc{$e} ? $esc{$e} : $e);
+			}ge;
+			return $t;
+		}
+
+		sub dutch_date {
+			my ($s) = @_;
+			return "" if not $s;
+			my ($y, $m, $d) = $s =~ m{(\d{4})-(\d{2})-(\d{2})};
+			return clean($s) if not $y;
+			my ($hh, $mm) = ($s =~ m{T(\d{2}):(\d{2})});
+			return "$d " . ($nl[$m - 1] || $m) . " $y" . (defined $hh ? " $hh:$mm" : "");
+		}
+
+		# ---- HTML-artikel: kop en metadata uit het JSON-LD-blok ----
+		my ($title)  = $h =~ m!"headline"\s*:\s*"((?:[^"\\]|\\.)*)"!s;
+		my ($author) = $h =~ m!"author"\s*:\s*\[.{0,400}?"name"\s*:\s*"((?:[^"\\]|\\.)*)"!s;
+		my ($iso)    = $h =~ m!"datePublished"\s*:\s*"([^"]*)"!s;
+		# Reactietelling staat in een aria-label ("1 reactie"), niet in de
+		# tekst naast het woord reacties.
+		my ($react) = $h =~ m{class="commentCount[^"]*"[^>]*aria-label="([^"]*)"}s;
+
+		if (not defined $title or $title eq "") {
+			($title) = $h =~ m{<h1[^>]*>.*?data-cy="articleTitle"[^>]*>(.*?)</span>}s;
+		}
+
+		# Splits een blok op in stukken tekst en stukken die een link waren.
+		sub runs {
+			my ($s) = @_;
+			my (@out, $rest) = ();
+			$rest = $s;
+
+			while ($rest =~ m{\A(.*?)<a\b[^>]*href="([^"]*)"[^>]*>(.*?)</a>(.*)\z}s) {
+				my ($pre, $href, $label, $post) = ($1, $2, $3, $4);
+				$href =~ s/&amp;/&/g;
+				$href =~ s/&quot;/"/g;
+				my $t = clean($pre);
+				push @out, qq({"x":"@{[json($t)]}"}) if $t ne "";
+				my $lab = clean($label);
+				push @out, qq({"x":"@{[json($lab)]}","h":"@{[json($href)]}"}) if $lab ne "";
+				$rest = $post;
+			}
+
+			my $tail = clean($rest);
+			push @out, qq({"x":"@{[json($tail)]}"}) if $tail ne "";
+			return @out;
+		}
+
+		# Container met de volledige tekst; even diepte bijhouden zodat we
+		# niet in een geneste div uitlopen.
+		my $start = index($h, q{<div class="article largeWidth">});
+		$start = index($h, q{<div class="article ">}) if $start < 0;
+		if ($start < 0) {
+			print qq({"ok":0,"reason":"geen artikelcontainer"}\n);
+			exit 0;
+		}
+
+		my $depth = 0;
+		pos($h) = $start;
+		while ($h =~ m{(<div\b[^>]*>|</div>)}gcs) {
+			$depth += $1 =~ m{^</} ? -1 : 1;
+			last if $depth == 0;
+		}
+		my $body = substr($h, $start, pos($h) - $start);
+
+		my (@blocks, $chars) = ();
+		pos($body) = 0;
+		while (pos($body) < length($body)) {
+			last if @blocks >= 200 or $chars >= 24000;
+
+			# Eén patroon voor alle blokken. De niet-greedy .*? opent het
+			# eerstvolgende blok, dus de volgorde blijft documentvolgorde en
+			# een genest blok (bijv. <p> in een <li>) wordt meegelezen.
+			last if $body !~ m{\G.*?<(h2|h3|h4|p|li|blockquote)\b([^>]*)>(.*?)</\1>}gcs;
+
+			my ($tag, $attrs, $inner) = ($1, $2, $3);
+			my $type = $tag eq "li"          ? "li"
+			         : $tag eq "blockquote"  ? "quote"
+			         : $tag =~ m{^h}         ? "h"
+			         : $attrs =~ m{class="[^"]*lead} ? "lead"
+			         :                          "p";
+
+			my $text = clean($inner);
+
+			# Een lege alinea is bij Tweakers vaak een blok dat alleen uit
+			# een afbeelding of iframe bestaat; die slaan we over.
+			next if $text eq "";
+
+			my @r = runs($inner);
+			my $runs = @r ? "[" . join(",", @r) . "]" : "[]";
+
+			$chars += length($text);
+			push @blocks, qq({"t":"$type","x":"@{[json($text)]}","r":$runs});
+		}
+
+		$title = defined $title ? unjson($title) : "";
+		$title = clean($title) if $title eq "";
+		$author = defined $author ? unjson($author) : "";
+
+		print qq({"ok":1,"title":"@{[json($title)]}","author":"@{[json($author)]}","date":"@{[json(dutch_date($iso // ""))]}","reacties":"@{[json($react // "")]}","blocks":[), join(",", @blocks), qq(]}\n);
+	' "$1"
+}
+
+# YouTube-artikelen lezen we uit de Atom-feed van het kanaal in plaats van
+# uit de videopagina. De videopagina zit achter een consent-gate die
+# onvoorspelbaar openvalt; de feed niet, en die bevat de volledige
+# beschrijving. We doorlopen daarom de geconfigureerde YouTube-bronnen tot we
+# de video tegenkomen.
+video_article() {
+	local url="$1" vid
+
+	vid=$(printf '%s' "$url" | grep -oP 'v=\K[\w-]{6,}' | head -1)
+	[ -n "$vid" ] || vid=$(printf '%s' "$url" | grep -oP '/(?:shorts|v)/\K[\w-]{6,}' | head -1)
+	[ -n "$vid" ] || { printf '{"ok":0,"reason":"onleesbare video-url"}'; return 1; }
+
+	# De beschrijving zit niet in de (dode) feeds-route maar op de
+	# kijkpagina zelf; ytplayer.py pakt die uit ytInitialPlayerResponse.
+	# Zelfde artikelvorm als extract_article, dus het paneel verandert niet.
+	local out try delayer
+	out=""
+	for try in 1 2 3 4 5; do
+		curl -sSL --max-time 25 --compressed \
+			-A "$UA" -b "CONSENT=YES+" -H "Accept-Language: nl-NL,nl;q=0.9" \
+			"https://www.youtube.com/watch?v=$vid" -o "$TMP/page.html" 2>/dev/null
+		[ -s "$TMP/page.html" ] || { sleep 1; continue; }
+		out=$(python3 "$BIN_DIR/ytplayer.py" "$TMP/page.html" 2>/dev/null)
+		printf '%s' "$out" | grep -q '"ok":1' && { printf '%s\n' "$out"; return 0; }
+		delayer=1
+		[ "$try" -gt 1 ] && delayer=$((try - 1))
+		sleep "$delayer"
+	done
+
+	# Nog een laatste poging zonder de omweg: soms is de pagina een kale
+	# schil en staat de beschrijving alleen als meta-tag.
+	if [ -s "$TMP/page.html" ]; then
+		local desc
+		desc=$(grep -oP '<meta name="description" content="\K[^"]*' "$TMP/page.html" | head -1)
+		if [ -n "$desc" ]; then
+			local title
+			title=$(grep -oP '<meta name="title" content="\K[^"]*' "$TMP/page.html" | head -1)
+			printf '{"ok":1,"title":"%s","author":"%s","date":"","reacties":"","blocks":[{"t":"p","x":"%s","r":[{"x":"%s"}]}]}\n' \
+				"$title" "" "$desc" "$desc"
+			return 0
+		fi
+	fi
+
+	[ -n "$out" ] && { printf '%s\n' "$out"; return 0; }
+	printf '{"ok":0,"reason":"video niet gevonden"}'
+	return 1
+}
+
+run_article() {
+	[ -n "$ARTICLE_URL" ] || article_fail "geen url meegegeven"
+
+	local id key cache is_youtube=0
+	id=$(printf '%s' "$ARTICLE_URL" | grep -oP 'nieuws/\K[0-9]+' | head -1)
+
+	if printf '%s' "$ARTICLE_URL" | grep -q 'youtube\.com'; then
+		# De feed levert /shorts/ID of /v/ID, een handmatige plak kan ?v=ID zijn.
+		is_youtube=1
+		key=$(printf '%s' "$ARTICLE_URL" | grep -oP 'v=\K[\w-]{6,}' | head -1)
+		[ -n "$key" ] || key=$(printf '%s' "$ARTICLE_URL" | grep -oP '/(?:shorts|v)/\K[\w-]{6,}' | head -1)
+		[ -n "$key" ] || article_fail "onleesbare video-url"
+		cache="$CACHE_DIR/video-$key.json"
+	elif [ -n "$id" ]; then
+		cache="$CACHE_DIR/artikel-$id.json"
+	elif printf '%s' "$ARTICLE_URL" | grep -qP '^https?://'; then
+		# Een andere site dan Tweakers. De tekstextractie is op de
+		# Tweakers-structuur gericht en slaat er meestal op, waarna de
+		# paneelcode in de browser opent; de cache sleutel op de url.
+		key=$(printf '%s' "$ARTICLE_URL" | md5sum | cut -c1-16)
+		cache="$CACHE_DIR/pagina-$key.json"
+	else
+		article_fail "onleesbare url"
+	fi
+
+	# Artikelen en videobeschrijvingen veranderen niet meer; een dag
+	# caching scheelt herhaald klikken dezelfde link.
+	if [ "$FORCE" -eq 0 ] && [ -s "$cache" ]; then
+		local cage=$(( $(date +%s) - $(stat -c %Y "$cache" 2>/dev/null || echo 0) ))
+		[ "$cage" -lt "$ARTICLE_TTL" ] && { cat "$cache"; exit 0; }
+	fi
+
+	local art_json
+	if [ "$is_youtube" -eq 1 ]; then
+		art_json=$(video_article "$ARTICLE_URL")
+	else
+		# DPG zet een consent-gate voor de artikelpagina's; resolve_page
+		# praat die weg met de bevestigingslink uit de pagina zelf.
+		resolve_page "$ARTICLE_URL" "$ARTICLE_URL" || true
+		[ -s "$TMP/page.html" ] || article_fail "lege pagina"
+		art_json=$(extract_article "$TMP/page.html" "$ARTICLE_URL")
+	fi
+
+	case "$art_json" in
+	*'"ok":0'*)
+		# De Tweakers-extractor kent maar één CMS. Voor elke andere site
+		# de generieke extractor proberen (python/bs4); pas als die ook
+		# niets vindt, is de browser de laatste optie.
+		if [ "$is_youtube" -eq 0 ]; then
+			alt=$(python3 "$BIN_DIR/artikel_algemeen.py" "$TMP/page.html" "$ARTICLE_URL" 2>/dev/null)
+			case "$alt" in
+			*'"ok":1'*) art_json="$alt" ;;
+			*) printf '%s\n' "$alt" >&2 ;;
+			esac
+		fi
+		;;
+	esac
+
+	case "$art_json" in
+	*'"ok":1'*'"blocks":[]'*)
+		article_fail "artikel zonder tekst gevonden"
+		;;
+	*'"ok":0'*)
+		local reason
+		reason=$(printf '%s' "$art_json" | grep -oP '"reason":"\K[^"]*' | head -1)
+		article_fail "${reason:-artikelstructuur herkend}"
+		;;
+	esac
+
+	printf '%s\n' "$art_json" > "$cache" 2>/dev/null
+	printf '%s\n' "$art_json"
+}
+
+# ------------------------------------------------------------- archief
+#
+# Een opgeslagen artikel is een blok commentaar-pointer + markdown in één
+# platte tekst; zo blijft het leesbaar in elke editor en doorzoekbaar met
+# grep. Elke vermelding begint met een unieke URL-regel, zodat opslaan het
+#zelfde artikel nooit dubbel schrijft en zoeken elk blok kan afknippen.
+
+# Een artikel (opnieuw) ophalen en als markdown aan het archief toevoegen.
+run_opslaan() {
+	[ -n "$ARTICLE_URL" ] || { printf 'geen url om op te slaan\n'; exit 1; }
+
+	if [ -s "$ARCHIVE_FILE" ] && grep -qF "<!-- url: $ARTICLE_URL -->" "$ARCHIVE_FILE"; then
+		printf 'al opgeslagen\n'
+		exit 0
+	fi
+
+	local json
+	json=$(run_article) || exit $?
+	case "$json" in
+	*'"ok":1'*) ;;
+	*)
+		printf '%s\n' "$json" | head -1
+		exit 1
+		;;
+	esac
+
+	json="$json" url="$ARTICLE_URL" python3 - "$ARCHIVE_FILE" <<'PY'
+import json, os, sys, time
+data = os.environ["json"]
+url = os.environ["url"]
+archive = sys.argv[1]
+try:
+    a = json.loads(data)
+except Exception:
+    sys.exit("opgeslagen artikel onleesbaar")
+if not a.get("ok") or not isinstance(a.get("blocks"), list):
+    sys.exit("geen artikel")
+def esc(t):
+    return (t or "").replace("[", "\\[").replace("]", "\\]")
+def runs(b):
+    r = b.get("r")
+    if isinstance(r, list) and r:
+        parts = []
+        for run in r:
+            x = run.get("x", "")
+            h = run.get("h", "")
+            if h:
+                parts.append("[" + x + "](" + h + ")")
+            else:
+                parts.append(x)
+        return "".join(parts).rstrip()
+    return (b.get("x") or "").strip() if isinstance(b, dict) else ""
+head = "<!-- url: %s -->\n" % url
+head += "## [%s](%s)\n" % (esc(a.get("title") or ""), url)
+meta = []
+if a.get("author"):
+    meta.append(a.get("author"))
+if a.get("date"):
+    meta.append(a.get("date"))
+if a.get("reacties"):
+    meta.append(str(a.get("reacties")))
+if meta:
+    head += "\n*" + " \u00b7 ".join(meta) + "*\n"
+body = []
+for b in a["blocks"]:
+    kind = b.get("t") or "p"
+    txt = runs(b)
+    if not txt:
+        continue
+    if kind == "h":
+        body.append("### " + txt)
+    elif kind == "quote":
+        body.append("> " + txt)
+    elif kind == "li":
+        body.append("- " + txt)
+    else:
+        body.append(txt + "\n")
+os.makedirs(os.path.dirname(archive), exist_ok=True)
+with open(archive, "a", encoding="utf-8") as f:
+    f.write("\n" + head + "\n" + "\n\n".join(body) + "\n")
+print("opgeslagen in artikel-archief.md")
+PY
+}
+
+# Zoekterm door het archief; resultaten als JSON (nieuwste eerst).
+run_archief_zoek() {
+	if [ ! -s "$ARCHIVE_FILE" ]; then
+		printf '{"ok":0,"reason":"archief nog leeg"}\n'
+		exit 0
+	fi
+	term="$SEARCH_TERM" python3 - "$ARCHIVE_FILE" <<'PY'
+import json, os, re, sys
+term = os.environ.get("term") or ""
+archive = sys.argv[1]
+try:
+    data = open(archive, encoding="utf-8").read()
+except Exception:
+    print('{"ok":0,"reason":"archief onleesbaar"}')
+    sys.exit(0)
+needle = term.lower()
+entries = []
+for chunk in data.split("<!-- url: ")[1:]:
+    url = chunk.split(" -->")[0].strip()
+    rest = chunk.split(" -->", 1)[1] if " -->" in chunk else chunk
+    title = ""
+    m = re.search(r"^##\s+\[(.+?)\]\((?:" + re.escape(url) + r")\)", rest, re.M)
+    if m:
+        title = m.group(1).strip()
+    else:
+        m = re.search(r"^##\s+(.+)", rest, re.M)
+        title = m.group(1).strip() if m else ""
+    dateline = ""
+    m = re.search(r"^\*(.*?)\*\s*$", rest, re.M)
+    if m:
+        dateline = m.group(1).strip()
+    hay = (title + "\n" + rest).lower()
+    if needle and needle not in hay:
+        continue
+    snippet = ""
+    for line in rest.splitlines():
+        ls = line.strip()
+        if not ls or ls.startswith("#") or ls.startswith("<!--"):
+            continue
+        if ls.startswith("*") and ls.endswith("*"):
+            continue
+        if needle and needle not in ls.lower():
+            continue
+        snippet = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", ls)
+        snippet = re.sub(r"\*\*(.+?)\*\*", r"\1", snippet).replace("**", "")
+        break
+    if len(snippet) > 180:
+        snippet = snippet[:177] + "..."
+    entries.append({"titel": title, "url": url, "datum": dateline, "snippet": snippet})
+entries.reverse()
+if not entries:
+    if needle:
+        print(json.dumps({"ok": 0, "reason": "geen treffers voor \u201c" + term + "\u201d"}, ensure_ascii=False))
+    else:
+        print('{"ok":0,"reason":"archief nog leeg"}')
+else:
+    print(json.dumps({"ok": 1, "results": entries}, ensure_ascii=False))
+PY
+}
+
+# Alertmodus voor nieuwe koppen (gebruikt door de automatische poll van de
+# panel-plugin). Haalt de actuele lijst van de bron via de normale lijstmodus
+# (die uit eigen cache leest, dus zonder extra netwerkbelasting zolang de
+# cache vers genoeg is) en stuurt voor elk item dat we nog niet eerder zagen
+# een omarchy-notificatie met de kop. De eerste keer wordt alleen de
+# beginsituatie vastgelegd — anders zou de allereerste poll alle al zichtbare
+# koppen nog een keer gaan melden.
+run_prik() {
+	KEY=$(source_field "$SOURCE" key 2>/dev/null)
+	[ -n "$KEY" ] || KEY="bron-$SOURCE"
+	BRON=$(source_field "$SOURCE" name)
+	SEEN="$CACHE_DIR/prik-gezien-$KEY.txt"
+	NOTIFY_LOCK="$CACHE_DIR/prik-notify.lock"
+
+	# De lijstmodus in lines-vorm (titel<TAB>url); --count houdt de bonte
+	# reeks beperkt. Een fallback terug naar de lijst-cache doet de subcall
+	# zelf, dus we rusten hier gewoon op dezelfde paden als de refresh.
+	RESULT=$(MIN_INTERVAL="$MIN_INTERVAL" "$0" --source "$SOURCE" --count 12 --lines list 2>/dev/null)
+	[ -z "$RESULT" ] && return 1
+
+	# Eerste kennismaking legt alleen de beginsituatie vast; pas bij een
+	# volgende poll zijn écht nieuwe koppen nieuws.
+	SEEDED=0
+	[ -f "$SEEN" ] && SEEDED=1
+
+	PRIK_PY='import sys
+path = sys.argv[1]
+try:
+    old = [l.rstrip("\n") for l in open(path, encoding="utf-8")]
+except (FileNotFoundError, PermissionError):
+    old = []
+seen = set()
+for l in old:
+    if "\t" in l:
+        seen.add(l.split("\t")[-1])
+cur = [l for l in sys.stdin.read().splitlines() if l]
+new = []
+for l in cur:
+    u = l.split("\t")[-1] if "\t" in l else l
+    if u not in seen:
+        seen.add(u)
+        new.append(l)
+write = new + old
+with open(path + ".tmp", "w", encoding="utf-8") as f:
+    f.write("\n".join(write[:300]) + ("\n" if write[:300] else ""))
+sys.stdout.write("\n".join(new))'
+
+	NEW=$(printf '%s\n' "$RESULT" | python3 -c "$PRIK_PY" "$SEEN")
+
+	if [ -s "$SEEN.tmp" ]; then
+		mv -f "$SEEN.tmp" "$SEEN" 2>/dev/null
+		# Alleen echt nieuwe koppen melden (de seed-ronde houdt het stil,
+		# zodat niet ineens álle bestaande koppen een notificatie geven).
+		if [ "$SEEDED" -eq 1 ] && [ -n "$NEW" ]; then
+			nr=0
+			while IFS=$'\t' read -r titel url; do
+				[ -n "$titel" ] || continue
+				korte=${titel:0:120}
+				# Eén melding tegelijk: wacht tot de vorige toast (10 s) zijn
+				# tijd heeft gehad, ook als een andere bron hem plaatste.
+				try=0
+				while [ -f "$NOTIFY_LOCK" ]; do
+					oud=$(( $(date +%s) - $(stat -c %Y "$NOTIFY_LOCK" 2>/dev/null || echo 0) ))
+					[ "$oud" -ge 10 ] && break
+					try=$((try + 1))
+					[ "$try" -ge 120 ] && break
+					sleep 1
+				done
+				touch "$NOTIFY_LOCK" 2>/dev/null
+				printf 'nieuw in %s: %s\n' "$BRON" "$korte"
+				notify-send -t 10000 -a "tweakers-nieuws" "$korte" "Nieuw in $BRON" 2>/dev/null || true
+				nr=$((nr + 1))
+				# Hooguit vier toasts per poll: een feed die in één keer
+				# vijf artikelen spuwt hoeft geen tonnetje berichten.
+				[ "$nr" -ge 4 ] && break
+			done <<< "$NEW"
+		fi
+	else
+		rm -f "$SEEN.tmp" 2>/dev/null
+	fi
+}
+
+case "$MODE" in
+sources)
+	load_sources
+	exit 0
+	;;
+article)
+	run_article
+	exit 0
+	;;
+opslaan)
+	run_opslaan
+	exit $?
+	;;
+archief_zoek)
+	run_archief_zoek
+	exit $?
+	;;
+prik)
+	run_prik
+	exit $?
+	;;
+set)
+	set_source "$SET_INDEX" "$SET_KEY" "$SET_VALUE"
+	exit $?
+	;;
+add)
+	add_source "$SET_VALUE" "$SET_KEY"
+	exit $?
+	;;
+remove)
+	remove_source "$SET_INDEX"
+	exit $?
+	;;
+move)
+	move_source "$SET_INDEX" "$SET_KEY"
+	exit $?
+	;;
+search)
+	# Een term met een domeinachtige (punt + spatie loos) wordt als nieuwssite
+	# behandeld (RSS zoeken); losse teksten blijven YouTube-kanalen.
+	site_or_youtube_search "$SEARCH_TERM"
+	exit $?
+	;;
+esac
+
+# ------------------------------------------------------------- lijstmodus
+
+# Een verse ophaalbeurt die niets oplevert mag geen leeg paneel opleveren
+# zolang er koppen uit een eerdere ophaalbeurt in de cache liggen. YouTube
+# is niet altijd even alert; dan _blijft_ de laatste bekende stand staan in
+# plaats van een schrikfout. Alleen als er nog nooit iets binnenkwam (of als
+# de bron echt leeg is) is er geen andere keuze dan de foutmelding.
+stale_cache_or_fail() {
+	if [ -s "$LIST_CACHE" ]; then
+		# Stempel ook even de mtime: tijdens een storing hoeft niet élke
+		# paneel-refresh opnieuw tien seconden aan de netwerkretries te
+		# hangen. De limiet van MIN_INTERVAL blijft gewoon werken, dus na
+		# verloop van tijd probeert het script vanzelf weer vers.
+		touch "$LIST_CACHE" 2>/dev/null
+		emit_result "$(cat "$LIST_CACHE")"
+		exit 0
+	fi
+	fail "$1"
+}
+
+# Eén uitgang voor elke lijst-route (cache-hit, verse ophaalbeurt, YouTube,
+# feed): de paneel-fetch krijgt JSON, de alertmodus (prik) de compacte
+# titel<TAB>url-regels.
+emit_result() {
+	if [ "$FORMAT" = "lines" ]; then
+		printf '%s' "$1" | perl -0777 -ne 'while (m{"url":"([^"]+)","title":"([^"]*)"}g) { print "$2\t$1\n" }'
+	else
+		printf '%s\n' "$1"
+	fi
+}
+
+# Een @kanaal vertalen naar de recente video's. De oude
+# feeds/videos.xml?channel_id=…-route geeft sinds kort overal een 404, dus
+# pakken we de VideoS-tab van de kanaalpagina en draaien die door
+# ytvideos.py; de uitvoer heeft dezelfde JSON-vorm als de feed-parser, zodat
+# caching en het openen van een item in het paneel onveranderd werken.
+SRC_YT=$(source_field "$SOURCE" youtube)
+SRC_URL=$(source_field "$SOURCE" url)
+# Een bron mag hooguit één van url/youtube hebben; als er toch beiden staan
+# (bij een record dat ooit via een oudere variant is geschreven), heeft de
+# url voorrang — anders stuit een kanaalwaarde die achterbleef op een lege
+# VideoS-tab en lijkt de bron kapot.
+if [ -n "$SRC_YT" ] && [ -z "$SRC_URL" ]; then
+	LIST_CACHE="$CACHE_DIR/list-$SOURCE.json"
+
+	if [ "$FORCE" -eq 0 ] && [ "$MIN_INTERVAL" -gt 0 ] && [ -s "$LIST_CACHE" ]; then
+		age=$(( $(date +%s) - $(stat -c %Y "$LIST_CACHE" 2>/dev/null || echo 0) ))
+		[ "$age" -lt "$MIN_INTERVAL" ] && { emit_result "$(cat "$LIST_CACHE")"; exit 0; }
+	fi
+
+	RESULT=$(channel_videos "$SRC_YT")
+	[ "$(printf '%s' "$RESULT" | tr -d '[]' | tr -d ' ')" = "" ] && stale_cache_or_fail "kanaal $SRC_YT heeft geen video's"
+	printf '%s\n' "$RESULT" > "$LIST_CACHE" 2>/dev/null
+	emit_result "$RESULT"
+	exit 0
+fi
+unset SRC_YT SRC_URL
+
+FEED_URL=$(feed_url_for "$SOURCE")
+if [ -z "$FEED_URL" ]; then
+	# Zeg welk kanaal het was; "bron 1 kon niet worden opgelost" is lastig
+	# te debuggen als je net hebt getypt.
+	fail "bron $SOURCE kon niet worden opgelost"
+fi
+
+LIST_CACHE="$CACHE_DIR/list-$SOURCE.json"
+
+if [ "$FORCE" -eq 0 ] && [ "$MIN_INTERVAL" -gt 0 ] && [ -s "$LIST_CACHE" ]; then
+	age=$(( $(date +%s) - $(stat -c %Y "$LIST_CACHE" 2>/dev/null || echo 0) ))
+	[ "$age" -lt "$MIN_INTERVAL" ] && { emit_result "$(cat "$LIST_CACHE")"; exit 0; }
+fi
+
+grab_feed "$FEED_URL"
+[ -s "$TMP/feed.xml" ] || stale_cache_or_fail "lege feed"
+
+# RSS en Atom verschillen genoeg van elkaar dat één regexset niet de moeite
+# waard is: we herkennen per item welke vorm het is.
+RESULT=$(TWEKERS_COUNT="$COUNT" perl -0777 -ne '
+	my ($n, @out) = ($ENV{TWEKERS_COUNT} || 5);
+
+	# Sommige feeds (Lobsters) leveren HTML die al ge-escaped is, andere
+	# (Tweakers) leveren echte tags. Daarom eerst decoderen, dan strippen,
+	# dan nog eens decoderen voor entiteiten die in tag-attributen zaten.
+	# &amp; blijft bewust als laatste, anders zou &amp;lt; dubbel decoderen.
+	sub unesc {
+		my ($t) = @_;
+		$t =~ s/&nbsp;/ /g;
+		$t =~ s/&quot;/"/g;
+		$t =~ s/&#0*39;/chr(39)/ge;
+		$t =~ s/&#x0*27;/chr(39)/ge;
+		$t =~ s/&lt;/</g;
+		$t =~ s/&gt;/>/g;
+		$t =~ s/&eacute;/chr(233)/ge;
+		$t =~ s/&amp;/&/g;
+		return $t;
+	}
+
+	sub clean {
+		my ($t) = @_;
+		return "" if not defined $t;
+		$t =~ s/<!\[CDATA\[//g;
+		$t =~ s/\]\]>//g;
+		$t = unesc($t);
+		$t =~ s/<[^>]*>//gs;
+		$t = unesc($t);
+		$t =~ s/<[^>]*>//gs;
+		$t =~ s/&[a-zA-Z#0-9]+;/ /g;
+		$t =~ s/\s+/ /g;
+		$t =~ s/^\s+|\s+$//g;
+		return $t;
+	}
+
+	sub json {
+		my ($t) = @_;
+		$t = "" if not defined $t;
+		$t =~ s/\\/\\\\/g;
+		$t =~ s/"/\\"/g;
+		$t =~ s/\x{2028}|\x{2029}//g;
+		return $t;
+	}
+
+	my @nl = qw{januari februari maart april mei juni juli augustus september oktober november december};
+	my @en = qw{Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec};
+
+	# "Sun, 27 Sep 2026 09:51:00 +0200" (RSS) of "2026-09-26T14:15:01+00:00"
+	# (Atom) naar hetzelfde Nederlandse formaat.
+	sub any_date {
+		my ($s) = @_;
+		return "" if not $s;
+
+		if ($s =~ m{(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})}) {
+			my ($y, $m, $d, $hh, $mm) = ($1, $2, $3, $4, $5);
+			return "$d " . ($nl[$m - 1] || $m) . " $y $hh:$mm";
+		}
+		if ($s =~ m{^\w+,\s*(\d{1,2})\s+(\w{3})\s+(\d{4})\s+(\d{2}):(\d{2})}) {
+			my ($d, $mon, $y, $hh, $mm) = ($1, $2, $3, $4, $5);
+			my $i = 0;
+			$i++ while $i < 12 and $en[$i] ne $mon;
+			return "$d " . ($nl[$i] || $mon) . " $y $hh:$mm";
+		}
+		return clean($s);
+	}
+
+	# RSS heeft <item>, Atom <entry>. Binnen een item verschilt de link ook:
+	# RSS zet de URL als tekst, Atom als href-attribuut.
+	while (m{<item>(.*?)</item>|<entry[^>]*>(.*?)</entry>}gs) {
+		my $it = defined $1 ? $1 : $2;
+		last if @out >= $n;
+
+		my ($title) = $it =~ m{<title[^>]*>(.*?)</title>}s;
+		my ($url)   = $it =~ m{<link[^>]*>\s*(?:<!\[CDATA\[)?\s*([^<\]\s][^<]*?)\s*(?:\]\]>)?\s*</link>}s;
+		($url) = $it =~ m{<link\b[^>]*\brel="alternate"[^>]*\bhref="([^"]*)"}s if not $url;
+		($url) = $it =~ m{<link\b(?![^>]*\brel=)[^>]*\bhref="([^"]*)"}s if not $url;
+
+		my ($lead) = $it =~ m{<description[^>]*>(.*?)</description>}s;
+		($lead) = $it =~ m{<media:description[^>]*>(.*?)</media:description>}s if not $lead or $lead !~ m{\S};
+		($lead) = $it =~ m{<summary[^>]*>(.*?)</summary>}s if not $lead or $lead !~ m{\S};
+
+		# RSS zet de auteur als platte tekst, Atom in een genest <name>.
+		my ($auth) = $it =~ m{<author\b[^>]*>.{0,300}?<name[^>]*>(.*?)</name>}s;
+		($auth) = $it =~ m{<author\b[^>]*>([^<]*)</author>}s if not $auth or $auth !~ m{\S};
+		($auth) = $it =~ m{<dc:creator[^>]*>(.*?)</dc:creator>}s if not $auth or $auth !~ m{\S};
+
+		my ($date) = $it =~ m{<pubDate[^>]*>(.*?)</pubDate>}s;
+		($date) = $it =~ m{<published[^>]*>(.*?)</published>}s if not $date;
+		($date) = $it =~ m{<updated[^>]*>(.*?)</updated>}s if not $date;
+
+		$title = clean($title);
+		$lead  = clean($lead);
+		$url   = clean($url);
+		next if $title eq "" or $url !~ m{^https?://};
+
+		if (length($lead) > 320) {
+			$lead = substr($lead, 0, 317) . "...";
+		}
+
+		push @out, qq({"url":"@{[json($url)]}","title":"@{[json($title)]}","lead":"@{[json($lead)]}","author":"@{[json(clean($auth))]}","date":"@{[json(any_date($date))]}","reacties":""});
+	}
+
+	print "[", join(",", @out), "]\n";
+' "$TMP/feed.xml")
+
+[ "$(printf '%s' "$RESULT" | tr -d '[]' | tr -d ' ')" = "" ] && stale_cache_or_fail "geen items in de feed"
+printf '%s\n' "$RESULT" > "$LIST_CACHE" 2>/dev/null
+
+if [ "$FORMAT" = "lines" ]; then
+	printf '%s' "$RESULT" | perl -0777 -ne 'while (m{"url":"([^"]+)","title":"([^"]*)"}g) { print "$2\t$1\n" }'
+else
+	printf '%s\n' "$RESULT"
+fi

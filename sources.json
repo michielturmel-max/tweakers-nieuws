@@ -1,0 +1,5 @@
+{
+  "sources": [{ "name": "Tweakers", "url": "https://tweakers.net/feeds/nieuws.xml" },
+    { "name": "Tweakers TV", "youtube":"@tweakers" },
+    { "name": "Lobsters", "url": "https://lobste.rs/rss" }]
+}

@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "id": "tweakers.nieuws",
+  "name": "Tweakers Nieuws",
+  "version": "1.2.0",
+  "author": "michiel",
+  "license": "MIT",
+  "description": "Nieuws uit meerdere bronnen: RSS-feeds, secties van nieuwssites en YouTube-kanalen, in het paneel. Bewaar artikelen in je eigen archief en zoek ze terug",
+  "kinds": ["bar-widget"],
+  "entryPoints": { "barWidget": "Panel.qml" },
+  "barWidget": {
+    "displayName": "Nieuws",
+    "description": "Koppen uit meerdere bronnen: RSS-feeds, websites (met automatische sectie-keuze) en YouTube-kanalen. Klik op een kop om het artikel in het paneel te lezen. In de lijst kiest ↑↓ een kop en leest enter hem; ←→ wisselen van bron (rechts voorbij de laatste tab opent het hamburgermenu). In een artikel gaat ← terug en → naar het volgende artikel, esc/backspace gaat ook terug, s bewaart in je archief, r ververst, o opent de site van de bron. Rechtsklik opent de kop in de browser. In het ☰-menu staat onder 'archief' je opgeslagen artikelen: de lijst opent meteen, het zoekveld filtert, een klik leest in het paneel en ↗ opent in de browser.",
+    "category": "Internet",
+    "aliases": ["tweakers", "nieuws", "koppen"],
+    "allowMultiple": false,
+    "defaultSection": "center",
+    "defaults": {
+      "count": 10
+    },
+    "schema": [
+      {
+        "key": "count",
+        "type": "number",
+        "label": "Aantal koppen",
+        "description": "Hoeveel nieuwskoppen het paneel toont (maximaal 10)"
+      }
+    ]
+  }
+}
