@@ -12,7 +12,24 @@ Nieuwsbalk-widget voor [Omarchy](https://omarchy.org): koppen uit RSS-feeds, web
 - Omarchy met de Quickshell-shell (`omarchy-shell`).
 - `python3`, `curl` en `perl` (aanwezig op een standaard Omarchy-installatie).
 
-## Installatie
+## Downloaden en installeren
+
+Er zijn twee manieren. De zip is het simpelst als je niet met git werkt; met een clone kun je later makkelijk updaten.
+
+### Optie 1: zip uit de release
+
+1. Ga naar [Releases](https://github.com/michielturmel-max/tweakers-nieuws/releases) en download `tweakers.nieuws-<versie>.zip` bij de nieuwste release.
+2. Pak de zip uit, bijvoorbeeld naar `~/Downloads`.
+3. Open een terminal in de uitgepakte map en voer uit:
+
+   ```sh
+   cd ~/Downloads/tweakers.nieuws
+   ./install.sh install
+   ```
+
+   Staat de map ergens anders? `cd` er dan naartoe; de map moet `manifest.json`, `Panel.qml` en `install.sh` bevatten.
+
+### Optie 2: met git
 
 ```sh
 git clone https://github.com/michielturmel-max/tweakers-nieuws.git
@@ -20,9 +37,19 @@ cd tweakers-nieuws
 ./install.sh install
 ```
 
-Daarna verschijnt de widget in de balk. Staat hij er nog niet: `omarchy plugin enable tweakers.nieuws` of kies hem via de plugin-instellingen. De eerste keer staan er drie voorbeeldbronnen in; pas ze aan via het hamburgermenu.
+### Na de installatie
 
-`./install.sh` kent ook `update`, `version`, `uninstall` en `help`. Je eigen `sources.json` blijft bij een update bewaard.
+De widget zou meteen in de balk moeten staan. Is dat niet zo, herstart dan de shell of zet de plugin aan:
+
+```sh
+omarchy-restart-shell
+# of:
+omarchy plugin enable tweakers.nieuws
+```
+
+De eerste keer staan er drie voorbeeldbronnen in; pas ze aan via het hamburgermenu (☰). Je eigen bronlijst staat in `~/.config/omarchy/plugins/tweakers.nieuws/sources.json` en blijft bij een update bewaard.
+
+`./install.sh` kent ook `update`, `version`, `uninstall` en `help`; `./install.sh help` toont de opties. Bij een zip-update pak je de nieuwe zip uit en draai je opnieuw `./install.sh install`.
 
 ## Bediening
 
