@@ -15,7 +15,7 @@ Nieuwsbalk-widget voor [Omarchy](https://omarchy.org): koppen uit RSS-feeds, web
 ## Installatie
 
 ```sh
-git clone https://github.com/<gebruiker>/tweakers-nieuws.git
+git clone https://github.com/michielturmel-max/tweakers-nieuws.git
 cd tweakers-nieuws
 ./install.sh install
 ```
