@@ -1,0 +1,92 @@
+{
+  "versie": 1,
+  "categorieen": [
+    {
+      "naam": "Nederlands nieuws",
+      "bronnen": [
+        { "naam": "NOS Nieuws", "url": "https://feeds.nos.nl/nosnieuwsalgemeen", "uitleg": "algemeen nieuws van de publieke omroep" },
+        { "naam": "NOS Binnenland", "url": "https://feeds.nos.nl/nosnieuwsbinnenland", "uitleg": "nieuws uit Nederland" },
+        { "naam": "NOS Buitenland", "url": "https://feeds.nos.nl/nosnieuwsbuitenland", "uitleg": "nieuws uit het buitenland" },
+        { "naam": "NOS Politiek", "url": "https://feeds.nos.nl/nosnieuwspolitiek", "uitleg": "politiek en bestuur" },
+        { "naam": "NOS Economie", "url": "https://feeds.nos.nl/nosnieuwseconomie", "uitleg": "economie en arbeidsmarkt" },
+        { "naam": "NOS Tech", "url": "https://feeds.nos.nl/nosnieuwstech", "uitleg": "technologie en digitale samenleving" },
+        { "naam": "RTL Nieuws", "url": "https://www.rtlnieuws.nl/rss.xml", "uitleg": "commercieel algemeen nieuws" },
+        { "naam": "NU.nl", "url": "https://www.nu.nl/rss", "uitleg": "snel nieuws, grootste nieuwssite" },
+        { "naam": "Omroep Brabant", "url": "https://www.omroepbrabant.nl/rss", "uitleg": "regionaal nieuws Noord-Brabant" },
+        { "naam": "RTV Oost", "url": "https://www.rtvoost.nl/rss", "uitleg": "regionaal nieuws Overijssel" }
+      ]
+    },
+    {
+      "naam": "Onderzoeksjournalistiek",
+      "bronnen": [
+        { "naam": "Follow the Money", "url": "https://www.ftm.nl/feed/", "uitleg": "onderzoek naar macht, geld en klimaat" },
+        { "naam": "Investico", "url": "https://www.platform-investico.nl/feed/", "uitleg": "onderzoeksplatform voor de dagbladen" },
+        { "naam": "Bellingcat", "url": "https://www.bellingcat.com/feed/", "uitleg": "open source-onderzoek" },
+        { "naam": "ProPublica", "url": "https://www.propublica.org/feeds/propublica/main", "uitleg": "Amerikaanse onderzoeksredactie" },
+        { "naam": "The Markup", "url": "https://themarkup.org/feeds/rss.xml", "uitleg": "data en algoritmes onderzocht" },
+        { "naam": "Rest of World", "url": "https://restofworld.org/feed/latest/", "uitleg": "technologie buiten het Westen" }
+      ]
+    },
+    {
+      "naam": "Wetenschap",
+      "bronnen": [
+        { "naam": "Scientias", "url": "https://feeds.feedburner.com/scientias-wetenschap", "uitleg": "Nederlands populair-wetenschappelijk nieuws" },
+        { "naam": "Nature", "url": "https://www.nature.com/nature.rss", "uitleg": "onderzoek en commentaar uit Nature" },
+        { "naam": "ScienceDaily", "url": "https://www.sciencedaily.com/rss/all.xml", "uitleg": "persberichten over nieuwe studies" },
+        { "naam": "Phys.org", "url": "https://phys.org/rss-feed/", "uitleg": "natuurkunde, ruimte en techniek" },
+        { "naam": "The Conversation", "url": "https://theconversation.com/global/articles.atom", "uitleg": "wetenschappers schrijven zelf" }
+      ]
+    },
+    {
+      "naam": "Technologie",
+      "bronnen": [
+        { "naam": "Ars Technica", "url": "https://feeds.arstechnica.com/arstechnica/index", "uitleg": "diepgaand technieuws" },
+        { "naam": "The Verge", "url": "https://www.theverge.com/rss/index.xml", "uitleg": "tech, media en cultuur" },
+        { "naam": "Hacker News", "url": "https://hnrss.org/frontpage", "uitleg": "wat ontwikkelaars lezen" },
+        { "naam": "MIT Technology Review", "url": "https://www.technologyreview.com/feed/", "uitleg": "technologie en samenleving" },
+        { "naam": "TechCrunch", "url": "https://techcrunch.com/feed/", "uitleg": "startups en techbedrijven" },
+        { "naam": "Techzine", "url": "https://www.techzine.nl/feed/", "uitleg": "Nederlands zakelijk technieuws" },
+        { "naam": "404 Media", "url": "https://www.404media.co/rss/", "uitleg": "technologie en internetcultuur" }
+      ]
+    },
+    {
+      "naam": "Klimaat en energie",
+      "bronnen": [
+        { "naam": "Carbon Brief", "url": "https://www.carbonbrief.org/feed/", "uitleg": "klimaatwetenschap en -beleid" },
+        { "naam": "Inside Climate News", "url": "https://insideclimatenews.org/feed/", "uitleg": "klimaatonderzoek en energie" },
+        { "naam": "Grist", "url": "https://grist.org/feed/", "uitleg": "klimaat met een oplossingsbril" },
+        { "naam": "Yale Climate Connections", "url": "https://yaleclimateconnections.org/feed/", "uitleg": "korte klimaatuitleg en nieuws" },
+        { "naam": "Down to Earth", "url": "https://downtoearthmagazine.nl/feed/", "uitleg": "Nederlands klimaat- en milieutijdschrift" }
+      ]
+    },
+    {
+      "naam": "Internationaal",
+      "bronnen": [
+        { "naam": "BBC World", "url": "https://feeds.bbci.co.uk/news/world/rss.xml", "uitleg": "wereldnieuws van de BBC" },
+        { "naam": "The Guardian World", "url": "https://www.theguardian.com/world/rss", "uitleg": "wereldnieuws, vaak met rechtendossier" },
+        { "naam": "Al Jazeera", "url": "https://www.aljazeera.com/xml/rss/all.xml", "uitleg": "nieuws uit het Midden-Oosten en daarbuiten" },
+        { "naam": "Deutsche Welle", "url": "https://rss.dw.com/rdf/rss-en-all", "uitleg": "Duitse publieke omroep, Engels" },
+        { "naam": "France 24", "url": "https://www.france24.com/en/rss", "uitleg": "Frans wereldnieuws, Engels" },
+        { "naam": "NPR News", "url": "https://feeds.npr.org/1001/rss.xml", "uitleg": "Amerikaanse publieke radio" },
+        { "naam": "UN News", "url": "https://news.un.org/feed/subscribe/en/news/all/rss.xml", "uitleg": "nieuws van de Verenigde Naties" }
+      ]
+    },
+    {
+      "naam": "Rechten en vrijheid",
+      "bronnen": [
+        { "naam": "Amnesty International", "url": "https://www.amnesty.org/en/latest/feed/", "uitleg": "mensenrechten wereldwijd" },
+        { "naam": "Human Rights Watch", "url": "https://www.hrw.org/rss/news", "uitleg": "onderzoek naar mensenrechtenschendingen" },
+        { "naam": "EFF", "url": "https://www.eff.org/rss/updates.xml", "uitleg": "digitale burgerrechten" },
+        { "naam": "CPJ", "url": "https://cpj.org/feed/", "uitleg": "persvrijheid en bedreigde journalisten" }
+      ]
+    },
+    {
+      "naam": "Media en politiek",
+      "bronnen": [
+        { "naam": "Nieman Lab", "url": "https://www.niemanlab.org/feed/", "uitleg": "de toekomst van journalistiek" },
+        { "naam": "Politico Europe", "url": "https://www.politico.eu/feed/", "uitleg": "EU-politiek en Brussel" },
+        { "naam": "EUobserver", "url": "https://euobserver.com/rss", "uitleg": "onafhankelijk EU-nieuws" }
+      ]
+    }
+  ]
+}

@@ -106,6 +106,12 @@ Panel {
   property var archiveResults: []
   property string archiveError: ""
 
+  // Vrije-media-catalogus (menu-formulier "vrij"): de gebundelde selectie
+  // per onderwerp, met per regel of die bron al in de lijst staat.
+  property bool vrijeLoading: false
+  property var vrijeBronnen: []
+  property string vrijeError: ""
+
   // Start met typen voor de actieve bron. Doet niets als die bron geen
   // bewerkbare sleutel heeft.
   function startEdit() {
@@ -240,6 +246,35 @@ Panel {
 
   function menuAddMode() { openMenuForm("add", -1) }
   function menuEdit(i) { openMenuForm("edit", i) }
+
+  function menuVrijeMode() {
+    menuFormMode = "vrij"
+    menuTarget = -1
+    manageError = ""
+    resetSearch()
+    menuTitle.text = "vrije media"
+    reloadVrije()
+  }
+
+  function reloadVrije() {
+    vrijeLoading = true
+    vrijeError = ""
+    vrijeProc.command = [scriptPath, "vrije-bronnen"]
+    vrijeProc.running = true
+  }
+
+  function applyVrije(raw) {
+    vrijeLoading = false
+    var text = String(raw || "").trim()
+    var d = null
+    try {
+      d = JSON.parse(text)
+    } catch (e) {
+      d = null
+    }
+    vrijeBronnen = d && d.bronnen ? d.bronnen : []
+    vrijeError = d && d.ok === 1 ? "" : (d && d.reason ? d.reason : "catalogus laden mislukt")
+  }
 
   // Klik op een bron in het menu: niet bewerken maar die bron bekijken.
   // setSource begint zelf de ophaalactie; het menu moet alleen nog dicht.
@@ -390,11 +425,16 @@ Panel {
     if (m) jump = parseInt(m[1], 10)
 
     // Het formulier sluit; de nieuwe/gewijzigde situatie is meteen zichtbaar.
-    menuFormMode = ""
+    // In de vrije-media-lijst blijft het formulier juist staan, zodat je
+    // meerdere bronnen achter elkaar kunt toevoegen; alleen de vinkjes
+    // worden bijgewerkt.
+    var vrij = menuFormMode === "vrij"
+    if (!vrij) menuFormMode = ""
     menuNameField.text = ""
     resetSearch()
     blurMenu()
     reloadAfterChange(jump)
+    if (vrij) reloadVrije()
     runPendingManage()
   }
 
@@ -958,6 +998,14 @@ Panel {
   }
 
   Process {
+    id: vrijeProc
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.applyVrije(text)
+    }
+  }
+
+  Process {
     id: articleProc
     stdout: StdioCollector {
       waitForEnd: true
@@ -1251,6 +1299,12 @@ Panel {
             return
           }
         }
+        if (t === "v" || t === "V") {
+          if (root.menuMode) {
+            root.menuVrijeMode()
+            return
+          }
+        }
 
         if (root.menuMode) {
           // In het menu wisselt een cijfer naar die bron; de koppen komen
@@ -1488,7 +1542,7 @@ Panel {
 
               Text {
                 width: parent.width - Style.space(16) - addBtn.implicitWidth
-                  - archieBtn.implicitWidth - Style.space(16)
+                  - archieBtn.implicitWidth - vrijBtn.implicitWidth - Style.space(20)
                 text: "bronnen (" + root.sources.length + ")"
                 color: Color.muted
                 font.family: root.bar ? root.bar.fontFamily : Style.font.family
@@ -1532,6 +1586,25 @@ Panel {
                   hoverEnabled: true
                   cursorShape: Qt.PointingHandCursor
                   onClicked: root.menuArchiveMode()
+                }
+              }
+
+              Text {
+                id: vrijBtn
+                height: Style.space(16)
+                text: "vrij"
+                color: vrijHover.containsMouse ? root.barForeground : Color.muted
+                font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                font.pixelSize: root.captionFont
+                verticalAlignment: Text.AlignVCenter
+                topPadding: Style.space(2)
+
+                MouseArea {
+                  id: vrijHover
+                  anchors.fill: parent
+                  hoverEnabled: true
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: root.menuVrijeMode()
                 }
               }
             }
@@ -1698,7 +1771,7 @@ Panel {
 
                 Row {
                   width: parent.width
-                  visible: root.menuFormMode !== "archief"
+                  visible: root.menuFormMode !== "archief" && root.menuFormMode !== "vrij"
                   spacing: Style.space(8)
 
                   Text {
@@ -1732,7 +1805,7 @@ Panel {
 
                 Row {
                   width: parent.width
-                  visible: root.menuFormMode !== "archief"
+                  visible: root.menuFormMode !== "archief" && root.menuFormMode !== "vrij"
                   spacing: Style.space(8)
 
                   Text {
@@ -2041,9 +2114,151 @@ Panel {
                   }
                 }
 
+                // De gebundelde selectie vrije media. Eén klik zet de bron in
+                // sources.json; het vinkje rechts laat zien wat al in de
+                // lijst staat. Het formulier blijft open, zodat je meerdere
+                // bronnen achter elkaar kunt toevoegen.
+                Item {
+                  width: parent.width
+                  visible: root.menuFormMode === "vrij"
+                  height: visible ? vrijCol.implicitHeight : 0
+
+                  Column {
+                    id: vrijCol
+                    width: parent.width
+                    spacing: Style.space(6)
+
+                    Text {
+                      width: parent.width
+                      text: "kies een bron om toe te voegen \u00b7 \u2713 = al in je lijst"
+                      color: Color.muted
+                      font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                      font.pixelSize: root.captionFont
+                      wrapMode: Text.WordWrap
+                    }
+
+                    Text {
+                      width: parent.width
+                      visible: root.vrijeLoading
+                      text: "catalogus laden \u2026"
+                      color: Color.muted
+                      font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                      font.pixelSize: root.captionFont
+                    }
+
+                    Text {
+                      width: parent.width
+                      visible: !root.vrijeLoading && root.vrijeError !== ""
+                      text: root.vrijeError
+                      textFormat: Text.PlainText
+                      color: Color.urgent
+                      font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                      font.pixelSize: root.captionFont
+                      wrapMode: Text.WordWrap
+                    }
+
+                    Repeater {
+                      model: root.vrijeBronnen
+
+                      delegate: Column {
+                        required property var modelData
+                        required property int index
+
+                        readonly property bool nieuweCategorie: index === 0
+                          || String(root.vrijeBronnen[index - 1].categorie || "")
+                             !== String(modelData.categorie || "")
+                        readonly property bool actief: Number(modelData.actief) === 1
+
+                        width: parent.width
+                        spacing: Style.space(2)
+
+                        Text {
+                          width: parent.width
+                          visible: nieuweCategorie
+                          text: String(modelData.categorie || "")
+                          color: root.barForeground
+                          font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                          font.pixelSize: root.captionFont
+                          font.weight: Font.DemiBold
+                          topPadding: Style.space(8)
+                          bottomPadding: Style.space(2)
+                        }
+
+                        Rectangle {
+                          id: vrijRow
+                          width: parent.width
+                          height: vrijRowText.implicitHeight + Style.space(8)
+                          radius: Style.cornerRadius
+                          color: !actief && vrijRowHover.hovered
+                            ? Color.menu.selectedBackground : "transparent"
+
+                          Column {
+                            id: vrijRowText
+                            anchors.left: parent.left
+                            anchors.right: vrijMark.left
+                            anchors.leftMargin: Style.space(8)
+                            anchors.rightMargin: Style.space(8)
+                            anchors.verticalCenter: parent.verticalCenter
+                            spacing: Style.space(1)
+
+                            Text {
+                              width: parent.width
+                              text: String(modelData.naam || "")
+                              color: root.barForeground
+                              opacity: actief ? 0.75 : 1
+                              font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                              font.pixelSize: root.bodyFont
+                              elide: Text.ElideRight
+                            }
+
+                            Text {
+                              width: parent.width
+                              text: String(modelData.uitleg || "")
+                              color: root.barForeground
+                              opacity: 0.72
+                              font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                              font.pixelSize: root.captionFont
+                              elide: Text.ElideRight
+                            }
+                          }
+
+                          Text {
+                            id: vrijMark
+                            width: Style.space(16)
+                            anchors.right: parent.right
+                            anchors.rightMargin: Style.space(8)
+                            anchors.verticalCenter: parent.verticalCenter
+                            horizontalAlignment: Text.AlignHCenter
+                            text: actief ? "\u2713" : "+"
+                            color: root.barForeground
+                            opacity: actief ? 0.75 : 0.55
+                            font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                            font.pixelSize: root.bodyFont
+                          }
+
+                          HoverHandler {
+                            id: vrijRowHover
+                            enabled: !actief
+                          }
+
+                          MouseArea {
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: actief ? Qt.ArrowCursor : Qt.PointingHandCursor
+                            onClicked: {
+                              if (actief) return
+                              root.manage("add", [String(modelData.url || ""), String(modelData.naam || "")])
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+
                 Row {
                   width: parent.width
-                  visible: root.menuFormMode !== "archief"
+                  visible: root.menuFormMode !== "archief" && root.menuFormMode !== "vrij"
                   spacing: Style.space(12)
 
                   Text {
@@ -2093,7 +2308,7 @@ Panel {
             Text {
               width: parent.width
               visible: root.menuFormMode === ""
-              text: "klik op een bron om te bekijken \u00b7 \u270e bewerken \u00b7 \u2191 \u2193 verplaatsen \u00b7 \u00d7 verwijderen \u00b7 a = nieuwe bron"
+              text: "klik op een bron om te bekijken \u00b7 \u270e bewerken \u00b7 \u2191 \u2193 verplaatsen \u00b7 \u00d7 verwijderen \u00b7 a = nieuwe bron \u00b7 v = vrije media"
               color: Color.muted
               font.family: root.bar ? root.bar.fontFamily : Style.font.family
               font.pixelSize: root.captionFont

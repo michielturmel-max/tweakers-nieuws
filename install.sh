@@ -116,7 +116,7 @@ install() {
   local stage="$PLUGINS_DIR/.$id.install.$$"
   rm -rf "$stage"
   mkdir -p "$stage"
-  cp -a "$SRC_DIR/manifest.json" "$SRC_DIR/Panel.qml" "$stage/"
+  cp -a "$SRC_DIR/manifest.json" "$SRC_DIR/Panel.qml" "$SRC_DIR/vrije-bronnen.json" "$stage/"
   cp -a "$SRC_DIR/bin" "$stage/bin"
 
   if python3 -m py_compile "$stage"/bin/*.py 2>/dev/null; then

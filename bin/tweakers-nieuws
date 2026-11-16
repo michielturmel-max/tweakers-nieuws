@@ -13,6 +13,11 @@
 #   artikel      tweakers-nieuws article <url>
 #                -> {"ok":1,"title","author","date","reacties",
 #                    "blocks":[{"t","x","r"}], ...}
+#   vrije media  tweakers-nieuws vrije-bronnen
+#                -> {"ok":1,"bronnen":[{"categorie","naam","url",
+#                    "uitleg","actief"}, ...]}
+#                (de catalogus in vrije-bronnen.json, met per bron of hij al
+#                 in sources.json staat)
 #
 # Alleen tekst: afbeeldingen en media worden weggelaten, want in een
 # balkpaneel zijn ze detailverliezend en zwaar.
@@ -82,6 +87,10 @@ while [ $# -gt 0 ]; do
 		;;
 	prik)
 		MODE=prik
+		shift
+		;;
+	vrije-bronnen)
+		MODE=vrijebronnen
 		shift
 		;;
 	list) MODE=list; shift ;;
@@ -262,6 +271,65 @@ load_sources() {
 		}
 		print "[", join(",", @out), "]\n";
 	' 2>/dev/null
+}
+
+# De gebundelde selectie vrije nieuwsbronnen, met per bron of die al in
+# sources.json staat. Eén vlakke lijst houdt het paneel simpel; de categorie
+# zit als veld bij elke regel.
+list_vrije_bronnen() {
+	local cat="$PLUGIN_DIR/vrije-bronnen.json"
+	if [ ! -s "$cat" ]; then
+		printf '{"ok":0,"reason":"vrije-bronnen.json ontbreekt","bronnen":[]}\n'
+		return 1
+	fi
+	python3 - "$cat" "$SOURCES_FILE" <<'PY'
+import json, sys
+
+cat_path, src_path = sys.argv[1], sys.argv[2]
+try:
+    with open(cat_path, encoding="utf-8") as fh:
+        catalog = json.load(fh)
+except (OSError, ValueError) as e:
+    json.dump({"ok": 0, "reason": "catalogus onleesbaar: %s" % e, "bronnen": []},
+              sys.stdout, ensure_ascii=False)
+    print()
+    sys.exit(0)
+
+try:
+    with open(src_path, encoding="utf-8") as fh:
+        data = json.load(fh)
+except (OSError, ValueError):
+    data = {}
+
+def norm(u):
+    return str(u or "").strip().rstrip("/").lower()
+
+active = set()
+for s in data.get("sources", []):
+    if not isinstance(s, dict):
+        continue
+    u = norm(s.get("url"))
+    if u:
+        active.add(u)
+    y = str(s.get("youtube") or "").strip()
+    if y:
+        active.add(("@" + y.lstrip("@")).lower())
+
+out = []
+for c in catalog.get("categorieen", []):
+    for b in c.get("bronnen", []):
+        u = str(b.get("url") or "").strip()
+        out.append({
+            "categorie": str(c.get("naam") or ""),
+            "naam": str(b.get("naam") or ""),
+            "url": u,
+            "uitleg": str(b.get("uitleg") or ""),
+            "actief": 1 if norm(u) in active else 0,
+        })
+
+json.dump({"ok": 1, "bronnen": out}, sys.stdout, ensure_ascii=False)
+print()
+PY
 }
 
 # Aantal geconfigureerde bronnen, zodat de paneelcode weet hoeveel tabs er
@@ -1463,6 +1531,10 @@ prik)
 	run_prik
 	exit $?
 	;;
+vrijebronnen)
+	list_vrije_bronnen
+	exit $?
+	;;
 set)
 	set_source "$SET_INDEX" "$SET_KEY" "$SET_VALUE"
 	exit $?
@@ -1631,8 +1703,10 @@ RESULT=$(TWEKERS_COUNT="$COUNT" perl -0777 -ne '
 	}
 
 	# RSS heeft <item>, Atom <entry>. Binnen een item verschilt de link ook:
-	# RSS zet de URL als tekst, Atom als href-attribuut.
-	while (m{<item>(.*?)</item>|<entry[^>]*>(.*?)</entry>}gs) {
+	# RSS zet de URL als tekst, Atom als href-attribuut. RDF-feeds (Nature,
+	# Deutsche Welle) schrijven <item rdf:about="…">, dus de tag mag
+	# attributen hebben.
+	while (m{<item(?:\s[^>]*)?>(.*?)</item>|<entry[^>]*>(.*?)</entry>}gs) {
 		my $it = defined $1 ? $1 : $2;
 		last if @out >= $n;
 
@@ -1653,6 +1727,7 @@ RESULT=$(TWEKERS_COUNT="$COUNT" perl -0777 -ne '
 		my ($date) = $it =~ m{<pubDate[^>]*>(.*?)</pubDate>}s;
 		($date) = $it =~ m{<published[^>]*>(.*?)</published>}s if not $date;
 		($date) = $it =~ m{<updated[^>]*>(.*?)</updated>}s if not $date;
+		($date) = $it =~ m{<dc:date[^>]*>(.*?)</dc:date>}s if not $date;
 
 		$title = clean($title);
 		$lead  = clean($lead);
