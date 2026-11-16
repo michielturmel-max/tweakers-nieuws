@@ -30,7 +30,7 @@ Panel {
   readonly property int captionFont: Style.font.caption
   readonly property int subtitleFont: Style.font.subtitle
 
-  property int articleFontDelta: Math.max(-2, Math.min(12, Number(setting("articleFontSize", 0))))
+  property int articleFontDelta: Math.max(-2, Math.min(12, Number(setting("articleFontSize", 3))))
   readonly property int articleTitleFont: Math.max(10, root.subtitleFont + root.articleFontDelta)
   readonly property int articleLeadFont: Math.max(10, root.bodyFont + root.articleFontDelta)
   readonly property int articleTextFont: Math.max(9, root.captionFont + root.articleFontDelta)
