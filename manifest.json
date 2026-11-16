@@ -16,7 +16,8 @@
     "allowMultiple": false,
     "defaultSection": "center",
     "defaults": {
-      "count": 10
+      "count": 10,
+      "articleFontSize": 0
     },
     "schema": [
       {
@@ -24,6 +25,12 @@
         "type": "number",
         "label": "Aantal koppen",
         "description": "Hoeveel nieuwskoppen het paneel toont (maximaal 10)"
+      },
+      {
+        "key": "articleFontSize",
+        "type": "number",
+        "label": "Lettergrootte artikel",
+        "description": "Aanpassing van de lettergrootte in artikelen (-2 tot 12)"
       }
     ]
   }

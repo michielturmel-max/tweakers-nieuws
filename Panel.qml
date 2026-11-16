@@ -30,9 +30,10 @@ Panel {
   readonly property int captionFont: Style.font.caption
   readonly property int subtitleFont: Style.font.subtitle
 
-  readonly property int articleTitleFont: root.subtitleFont
-  readonly property int articleLeadFont: root.bodyFont
-  readonly property int articleTextFont: root.captionFont
+  property int articleFontDelta: Math.max(-2, Math.min(12, Number(setting("articleFontSize", 0))))
+  readonly property int articleTitleFont: Math.max(10, root.subtitleFont + root.articleFontDelta)
+  readonly property int articleLeadFont: Math.max(10, root.bodyFont + root.articleFontDelta)
+  readonly property int articleTextFont: Math.max(9, root.captionFont + root.articleFontDelta)
 
   property var sources: []
   // De tabbalk toont hooguit drie bronnen; de rest zit in het menu. tabModel
@@ -1108,6 +1109,21 @@ Panel {
       // een typefout. De esc en enter uit dit blok horen dan bij het veld.
       blocked: editor.activeFocus || menuValueField.activeFocus || menuNameField.activeFocus || menuSearchField.activeFocus
 
+      Keys.onPressed: function(event) {
+        if (root.articleMode && !keyCatcher.blocked) {
+          if (event.key === Qt.Key_X || event.key === Qt.Key_Plus || event.key === Qt.Key_Equal) {
+            root.articleFontDelta = Math.min(12, root.articleFontDelta + 1)
+            event.accepted = true
+            return
+          }
+          if (event.key === Qt.Key_Z || event.key === Qt.Key_Minus) {
+            root.articleFontDelta = Math.max(-2, root.articleFontDelta - 1)
+            event.accepted = true
+            return
+          }
+        }
+      }
+
       onMoveRequested: function(dx, dy) {
         // Pijltjes links/rechts: in een artikel blader je door de lijst, in
         // het menu door de bronrijen, daarbuiten over de topbalk en door
@@ -1196,6 +1212,12 @@ Panel {
         }
         if (t === "s" || t === "S") {
           if (root.articleMode) { root.saveCurrentArticle(); return }
+        }
+        if (t === "z" || t === "Z" || t === "-") {
+          if (root.articleMode) { root.articleFontDelta = Math.max(-2, root.articleFontDelta - 1); return }
+        }
+        if (t === "x" || t === "X" || t === "+" || t === "=") {
+          if (root.articleMode) { root.articleFontDelta = Math.min(12, root.articleFontDelta + 1); return }
         }
         if (t === "a" || t === "A") {
           if (root.menuMode) {
@@ -2301,10 +2323,52 @@ Panel {
             bottomPadding: Style.space(10)
           }
 
+          Item {
+            width: parent.width
+            visible: root.articleMode && root.article !== null
+            height: fontRow.implicitHeight + Style.space(10)
+
+            Row {
+              id: fontRow
+              spacing: Style.space(12)
+
+              Text {
+                text: "A-"
+                color: root.barForeground
+                font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                font.pixelSize: root.bodyFont
+                MouseArea {
+                  anchors.fill: parent
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: root.articleFontDelta = Math.max(-2, root.articleFontDelta - 1)
+                }
+              }
+
+              Text {
+                text: "Lettergrootte " + (root.articleFontDelta > 0 ? "+" : "") + root.articleFontDelta + "  (z/x)"
+                color: Color.muted
+                font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                font.pixelSize: root.captionFont
+              }
+
+              Text {
+                text: "A+"
+                color: root.barForeground
+                font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                font.pixelSize: root.bodyFont
+                MouseArea {
+                  anchors.fill: parent
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: root.articleFontDelta = Math.min(12, root.articleFontDelta + 1)
+                }
+              }
+            }
+          }
+
           Text {
             width: parent.width
             visible: root.articleMode && root.article !== null
-            text: "s = opslaan in archief \u00b7 \u2190 of esc = terug \u00b7 \u2192 = volgend artikel \u00b7 r = herladen"
+            text: "s = opslaan in archief \u00b7 z/x = lettergrootte \u00b7 \u2190 of esc = terug \u00b7 \u2192 = volgend artikel \u00b7 r = herladen"
             color: Color.muted
             opacity: 0.85
             font.family: root.bar ? root.bar.fontFamily : Style.font.family
@@ -2396,7 +2460,7 @@ Panel {
           Text {
             width: parent.width
             visible: root.articleMode && root.article !== null
-            text: "\u2190 of esc/backspace = terug \u00b7 \u2192 = volgend artikel \u00b7 r = herladen \u00b7 s = in archief"
+            text: "z/x = lettergrootte \u00b7 \u2190 of esc/backspace = terug \u00b7 \u2192 = volgend artikel \u00b7 r = herladen \u00b7 s = in archief"
             color: Color.muted
             font.family: root.bar ? root.bar.fontFamily : Style.font.family
             font.pixelSize: root.articleTextFont
