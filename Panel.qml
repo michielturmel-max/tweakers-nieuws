@@ -778,13 +778,21 @@ Panel {
   // geldt hetzelfde beleid als bij een kapot artikel: de browser in.
   function articleTimeout() {
     if (!(articleMode && articleState === "bezig")) return
-    articleState = "fout"
-    var url = articleUrl
     var item = items[articleIndex]
-    if (!url && item) url = item.url || ""
+    var title = (item && item.title) ? item.title : "Artikel niet beschikbaar"
+    if (!articleUrl && item) articleUrl = item.url || ""
     pendingArticle = -1
-    closeArticle()
-    if (url) Qt.openUrlExternally(url)
+    pendingArticleUrl = ""
+    article = {
+      ok: 0,
+      title: title,
+      author: "",
+      date: "",
+      reacties: "",
+      blocks: [{ t: "p", x: "Het ophalen duurt te lang; de site blokkeert mogelijk de pagina. Open het artikel in de browser.", r: [] }]
+    }
+    articleState = "fout"
+    flick.contentY = 0
   }
 
   // Eén plek voor "een stap terug". Vanuit het tekstveld is dat de editor
@@ -952,7 +960,7 @@ Panel {
 
   Timer {
     id: articleGuard
-    interval: 12000
+    interval: 60000
     running: root.articleMode && root.articleState === "bezig"
     onTriggered: root.articleTimeout()
   }

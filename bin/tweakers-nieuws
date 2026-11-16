@@ -1140,7 +1140,9 @@ run_article() {
 		rm -rf "$prof" 2>/dev/null
 		timeout 60 "$bin" --headless=new --disable-gpu --disable-dev-shm-usage \
 			--no-first-run --no-default-browser-check --disable-extensions \
-			--mute-audio --user-data-dir="$prof" \
+			--mute-audio --disable-background-timer-throttling \
+			--disable-renderer-backgrounding --disable-backgrounding-occluded-windows \
+			--user-data-dir="$prof" \
 			--user-agent="$UA" --virtual-time-budget=20000 \
 			--dump-dom "$url" > "$TMP/page.html" 2>/dev/null
 		rc=$?
