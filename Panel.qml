@@ -839,22 +839,33 @@ Panel {
     // de lijst niet meer binnendringen.
     if (!articleMode) return
 
+    var text = String(raw || "").trim()
     var parsed = null
     try {
-      parsed = JSON.parse(String(raw || "").trim())
+      parsed = JSON.parse(text)
     } catch (e) {
       parsed = null
     }
 
-    // Geen bruikbaar artikel: dan maar de browser. Een leeg venster met een
-    // foutmelding is voor dit doel nutteloos, en dit pad hoort zelden voor te
-    // komen omdat het script zelf al faalt als de pagina omgegooid is.
+    // Geen bruikbaar artikel: toon de reden in het paneel en laat de
+    // gebruiker zelf kiezen om in de browser te openen.
     if (!parsed || !parsed.ok || !Array.isArray(parsed.blocks) || parsed.blocks.length === 0) {
+      var reason = ""
+      if (parsed && parsed.reason) reason = String(parsed.reason)
+      if (!reason) {
+        var first = text.split("\n")[0] || ""
+        reason = first.replace(/^artikel ophalen mislukt:\s*/i, "")
+      }
+      article = {
+        ok: 0,
+        title: (items[articleIndex] && items[articleIndex].title) ? items[articleIndex].title : "Artikel niet beschikbaar",
+        author: "",
+        date: "",
+        reacties: "",
+        blocks: [{ t: "p", x: reason || "De tekst van dit artikel kon niet in de plugin worden geladen.", r: [] }]
+      }
       articleState = "fout"
-      var item = items[articleIndex]
-      var fallbackUrl = (item && item.url) ? item.url : articleUrl
-      if (fallbackUrl) Qt.openUrlExternally(fallbackUrl)
-      closeArticle()
+      flick.contentY = 0
       return
     }
 
@@ -2407,6 +2418,24 @@ Panel {
             font.family: root.bar ? root.bar.fontFamily : Style.font.family
             font.pixelSize: root.bodyFont
             wrapMode: Text.WordWrap
+          }
+
+          Text {
+            width: parent.width
+            visible: root.articleMode && root.articleState === "fout" && root.articleUrl !== ""
+            text: "Open in browser"
+            color: Color.accent
+            font.family: root.bar ? root.bar.fontFamily : Style.font.family
+            font.pixelSize: root.bodyFont
+            font.underline: true
+            topPadding: Style.space(4)
+            bottomPadding: Style.space(8)
+
+            MouseArea {
+              anchors.fill: parent
+              cursorShape: Qt.PointingHandCursor
+              onClicked: Qt.openUrlExternally(root.articleUrl)
+            }
           }
 
           Repeater {

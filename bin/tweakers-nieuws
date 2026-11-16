@@ -1116,6 +1116,51 @@ run_article() {
 		[ "$cage" -lt "$ARTICLE_TTL" ] && { cat "$cache"; exit 0; }
 	fi
 
+	# Is dit een bruikbaar artikel? Een leeg blokkenlijstje telt niet mee:
+	# dan is er wel een pagina maar geen tekst (paywall, JS-schil).
+	article_ok() {
+		case "$1" in
+		*'"ok":1'*'"blocks":[]'*) return 1 ;;
+		*'"ok":1'*) return 0 ;;
+		*) return 1 ;;
+		esac
+	}
+
+	# Sommige sites (Cloudflare, JS-only, zware consent-muren) serveren aan
+	# een gewone curl geen artikel. Een echte browser lost de JS-challenge
+	# lokaal op; de DOM gaat daarna door dezelfde extractor. Dit is de
+	# eerste fallback: geen derde partij, geen API-sleutel.
+	render_page() {
+		local url="$1" bin="" cand prof rc
+		for cand in chromium chromium-browser google-chrome google-chrome-stable brave-browser microsoft-edge; do
+			if command -v "$cand" >/dev/null 2>&1; then bin="$cand"; break; fi
+		done
+		[ -n "$bin" ] || return 1
+		prof="$TMP/chrome-prof"
+		rm -rf "$prof" 2>/dev/null
+		timeout 60 "$bin" --headless=new --disable-gpu --disable-dev-shm-usage \
+			--no-first-run --no-default-browser-check --disable-extensions \
+			--mute-audio --user-data-dir="$prof" \
+			--user-agent="$UA" --virtual-time-budget=20000 \
+			--dump-dom "$url" > "$TMP/page.html" 2>/dev/null
+		rc=$?
+		rm -rf "$prof" 2>/dev/null
+		[ "$rc" -eq 0 ] && [ -s "$TMP/page.html" ]
+	}
+
+	# Lukt ook dat niet, dan kan een reader-proxy de pagina alsnog renderen.
+	# Dat is een derde partij: daarom pas na de lokale browser.
+	proxy_render() {
+		local url="$1"
+		curl -sSL --max-time 45 --compressed \
+			-H "x-target-selector: article" \
+			-H "x-return-format: html" \
+			-o "$TMP/proxy.html" "https://r.jina.ai/$url" 2>/dev/null || return 1
+		[ -s "$TMP/proxy.html" ] || return 1
+		cp "$TMP/proxy.html" "$TMP/page.html"
+		return 0
+	}
+
 	local art_json
 	if [ "$is_youtube" -eq 1 ]; then
 		art_json=$(video_article "$ARTICLE_URL")
@@ -1125,33 +1170,40 @@ run_article() {
 		resolve_page "$ARTICLE_URL" "$ARTICLE_URL" || true
 		[ -s "$TMP/page.html" ] || article_fail "lege pagina"
 		art_json=$(extract_article "$TMP/page.html" "$ARTICLE_URL")
-	fi
 
-	case "$art_json" in
-	*'"ok":0'*)
 		# De Tweakers-extractor kent maar één CMS. Voor elke andere site
-		# de generieke extractor proberen (python/bs4); pas als die ook
-		# niets vindt, is de browser de laatste optie.
-		if [ "$is_youtube" -eq 0 ]; then
+		# eerst de generieke extractor op de directe HTML proberen.
+		if ! article_ok "$art_json"; then
+			local alt
 			alt=$(python3 "$BIN_DIR/artikel_algemeen.py" "$TMP/page.html" "$ARTICLE_URL" 2>/dev/null)
 			case "$alt" in
 			*'"ok":1'*) art_json="$alt" ;;
 			*) printf '%s\n' "$alt" >&2 ;;
 			esac
 		fi
-		;;
-	esac
 
-	case "$art_json" in
-	*'"ok":1'*'"blocks":[]'*)
-		article_fail "artikel zonder tekst gevonden"
-		;;
-	*'"ok":0'*)
+		# Nog steeds niets: eerst de pagina lokaal in een browser renderen,
+		# daarna pas via de reader-proxy.
+		if ! article_ok "$art_json"; then
+			if render_page "$ARTICLE_URL"; then
+				art_json=$(python3 "$BIN_DIR/artikel_algemeen.py" "$TMP/page.html" "$ARTICLE_URL" 2>/dev/null)
+			fi
+		fi
+		if ! article_ok "$art_json"; then
+			if proxy_render "$ARTICLE_URL"; then
+				art_json=$(python3 "$BIN_DIR/artikel_algemeen.py" "$TMP/page.html" "$ARTICLE_URL" 2>/dev/null)
+			fi
+		fi
+	fi
+
+	if ! article_ok "$art_json"; then
+		case "$art_json" in
+		*'"blocks":[]'*) article_fail "artikel zonder tekst gevonden" ;;
+		esac
 		local reason
 		reason=$(printf '%s' "$art_json" | grep -oP '"reason":"\K[^"]*' | head -1)
 		article_fail "${reason:-artikelstructuur herkend}"
-		;;
-	esac
+	fi
 
 	printf '%s\n' "$art_json" > "$cache" 2>/dev/null
 	printf '%s\n' "$art_json"

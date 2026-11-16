@@ -26,6 +26,16 @@ NOISE = {"script", "style", "nav", "footer", "header", "aside", "form",
          "noscript", "iframe", "svg", "button", "template", "select", "menu",
          "dialog", "slot", "picture", "source"}
 
+# Klassen die op teasers, advertenties en consent-muren wijzen. Zulke blokken
+# staan vaak midden in de artikelcontainer; zonder deze filter belanden
+# "lees ook"-kaartjes en cookiebalken in de leesweergave.
+NOISE_CLASSES = ("relatedteaser", "related-teaser", "related-article",
+                 "related_article", "lees-ook", "read-more", "readmore",
+                 "advert", "ad-label", "ad-element", "advertisement",
+                 "promo", "newsletter", "cookie", "consent", "didomi",
+                 "paywall", "subscribe", "outbrain", "taboola", "breadcrumb",
+                 "social-share", "share-button", "tag-list", "comment")
+
 
 def clean(t):
     return re.sub(r"\s+", " ", t).replace("\u00a0", " ").strip()
@@ -189,6 +199,27 @@ class _Parser:
         self.stack[-1].children.append(TextNode(data))
 
 
+def _class_text(el):
+    attrs = getattr(el, "attrs", None)
+    if not attrs:
+        return ""
+    cls = attrs.get("class") or ""
+    if isinstance(cls, (list, tuple)):
+        cls = " ".join(cls)
+    return str(cls).lower()
+
+
+def strip_noise_classes(root):
+    for el in root.find_all(["div", "section", "aside", "a", "ul", "ol", "span", "p"]):
+        if el.name in ("html", "body", "article", "main"):
+            continue
+        if getattr(el, "parent", None) is None:
+            continue
+        cls = _class_text(el)
+        if cls and any(n in cls for n in NOISE_CLASSES):
+            el.decompose()
+
+
 def parse_page(data):
     if HAS_BS4:
         soup = BeautifulSoup(data, "html.parser")
@@ -198,6 +229,7 @@ def parse_page(data):
         soup = parser.root
     for el in soup.find_all(list(NOISE)):
         el.decompose()
+    strip_noise_classes(soup)
     return soup
 
 
@@ -338,6 +370,9 @@ def main():
     if not title:
         h = soup.select_one("title")
         title = clean(h.get_text(" ", strip=True)) if h is not None else ""
+    if not title:
+        h = soup.select_one("h1")
+        title = clean(h.get_text(" ", strip=True)) if h is not None else ""
 
     author = ""
     for sel in ("meta[name='author']", "meta[property='article:author']"):
@@ -351,6 +386,14 @@ def main():
             if el is not None:
                 author = clean(el.get_text(" ", strip=True))
                 break
+    if not author:
+        for el in soup.find_all(["a", "span", "div", "p"]):
+            cls = _class_text(el)
+            if ("author" in cls or "byline" in cls) and "author-bio" not in cls:
+                t = clean(el.get_text(" ", strip=True))
+                if 2 <= len(t) <= 80:
+                    author = t
+                    break
     author = re.sub(r"\s*[,|]\s*.*$", "", author)
 
     date = ""
