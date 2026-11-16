@@ -1365,7 +1365,8 @@ Panel {
                     anchors.left: parent.left
                     anchors.top: parent.top
                     text: tab.modelData.name || ""
-                    color: tab.activeTab ? root.barForeground : Color.muted
+                    color: root.barForeground
+                    opacity: tab.activeTab ? 1 : 0.72
                     font.family: root.bar ? root.bar.fontFamily : Style.font.family
                     font.pixelSize: root.bodyFont
                     font.weight: tab.activeTab ? Font.DemiBold : Font.Normal
@@ -1397,7 +1398,8 @@ Panel {
               text: root.fetchState === "bezig" ? "laden…"
                 : root.items.length ? "1–" + root.items.length + " om te lezen"
                 : "r = verversen"
-              color: Color.muted
+              color: root.barForeground
+              opacity: 0.72
               font.family: root.bar ? root.bar.fontFamily : Style.font.family
               font.pixelSize: root.captionFont
             }
@@ -1560,7 +1562,8 @@ Panel {
                   Text {
                     width: parent.width
                     text: mrow.modelData.value || mrow.modelData.site || ""
-                    color: Color.muted
+                    color: root.barForeground
+                    opacity: 0.72
                     font.family: root.bar ? root.bar.fontFamily : Style.font.family
                     font.pixelSize: root.captionFont
                     elide: Text.ElideRight
@@ -1969,7 +1972,8 @@ Panel {
                             width: parent.width
                             visible: arDate !== ""
                             elide: Text.ElideRight
-                            color: Color.muted
+                            color: root.barForeground
+                            opacity: 0.72
                             font.family: root.bar ? root.bar.fontFamily : Style.font.family
                             font.pixelSize: root.captionFont
                             text: arDate
@@ -1979,7 +1983,8 @@ Panel {
                             width: parent.width
                             visible: arSnippet !== ""
                             elide: Text.ElideRight
-                            color: Color.muted
+                            color: root.barForeground
+                            opacity: 0.72
                             font.family: root.bar ? root.bar.fontFamily : Style.font.family
                             font.pixelSize: root.captionFont
                             text: arSnippet
@@ -2130,10 +2135,11 @@ Panel {
                 Text {
                   anchors.centerIn: parent
                   text: String(row.index + 1)
-                  color: rowHover.containsMouse || root.listCursor === row.index
-                    ? root.barForeground : Color.muted
+                  color: root.barForeground
+                  opacity: 0.9
                   font.family: root.bar ? root.bar.fontFamily : Style.font.family
                   font.pixelSize: root.captionFont
+                  font.weight: Font.DemiBold
                 }
               }
 
@@ -2213,8 +2219,8 @@ Panel {
                   width: parent.width
                   visible: text !== ""
                   text: row.metaText + (row.modelData.reacties ? "   \u00b7   " + row.modelData.reacties + " reacties" : "")
-                  color: Color.muted
-                  opacity: 0.7
+                  color: root.barForeground
+                  opacity: 0.72
                   font.family: root.bar ? root.bar.fontFamily : Style.font.family
                   font.pixelSize: root.captionFont
                   wrapMode: Text.WordWrap
@@ -2328,7 +2334,8 @@ Panel {
               if (root.article.reacties) bits.push(root.article.reacties + " reacties")
               return bits.join(" \u00b7 ")
             }
-            color: Color.muted
+            color: root.barForeground
+            opacity: 0.8
             font.family: root.bar ? root.bar.fontFamily : Style.font.family
             font.pixelSize: root.articleTextFont
             wrapMode: Text.WordWrap
