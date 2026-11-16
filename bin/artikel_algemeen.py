@@ -205,21 +205,40 @@ def para_score(el):
     return sum(len(p.get_text(" ", strip=True)) for p in el.find_all("p"))
 
 
+def _class_has(el, needle):
+    cls = el.get("class") or ""
+    if isinstance(cls, (list, tuple)):
+        cls = " ".join(cls)
+    return needle.lower() in str(cls).lower()
+
+
 def pick_root(root):
+    for sel in ("[itemprop='articleBody']", "[data-element='articleBody']", "[data-testid='article-body']"):
+        hit = root.select_one(sel)
+        if hit is not None and para_score(hit) >= 60:
+            return hit
+
+    needles = ("article-body", "articlebody", "article__body", "article-content",
+               "articlecontent", "story-body", "post-content", "artdetail",
+               "detail__body", "tekst", "bodycopy")
+    for el in root.find_all(["div", "section", "article", "main"]):
+        if any(_class_has(el, n) for n in needles) and para_score(el) >= 60:
+            return el
+
     for tag in ("article", "main"):
         hit = root.find(tag)
-        if hit is not None and para_score(hit) >= 100:
+        if hit is not None and para_score(hit) >= 60:
             return hit
 
     best = None
     best_score = 0
     for el in root.find_all(["div", "section"]):
         score = para_score(el)
-        if score > 300:
-            if best is None or score > best_score * 1.2 or (
-                    best_score > 0 and score >= best_score * 0.8
-                    and len(el.get_text(" ", strip=True))
-                        < len(best.get_text(" ", strip=True))):
+        if score >= 80:
+            txtlen = len(el.get_text(" ", strip=True))
+            if best is None or score > best_score * 1.1 or (
+                    best_score > 0 and score >= best_score * 0.9
+                    and txtlen < len(best.get_text(" ", strip=True))):
                 best, best_score = el, score
     if best is not None:
         return best
@@ -351,8 +370,19 @@ def main():
     blocks = build_blocks(root)
 
     if len(blocks) < 1:
-        print(json.dumps({"ok": 0, "reason": "geen artikeltekst"}))
-        return 0
+        desc = ""
+        for sel in ("meta[property='og:description']", "meta[name='description']",
+                    "meta[name='twitter:description']"):
+            el = soup.select_one(sel)
+            if el is not None and el.get("content"):
+                desc = clean(el.get("content"))
+                if desc:
+                    break
+        if desc:
+            blocks = [{"t": "p", "x": desc, "r": [{"x": desc}]}]
+        else:
+            print(json.dumps({"ok": 0, "reason": "geen artikeltekst"}))
+            return 0
 
     payload = {
         "ok": 1,
