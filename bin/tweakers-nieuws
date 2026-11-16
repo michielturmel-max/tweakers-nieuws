@@ -1192,9 +1192,14 @@ run_article() {
 			fi
 		fi
 		if ! article_ok "$art_json"; then
-			if proxy_render "$ARTICLE_URL"; then
-				art_json=$(python3 "$BIN_DIR/artikel_algemeen.py" "$TMP/page.html" "$ARTICLE_URL" 2>/dev/null)
-			fi
+			case "$art_json" in
+			*'"premium":'*) ;;
+			*)
+				if proxy_render "$ARTICLE_URL"; then
+					art_json=$(python3 "$BIN_DIR/artikel_algemeen.py" "$TMP/page.html" "$ARTICLE_URL" 2>/dev/null)
+				fi
+				;;
+			esac
 		fi
 	fi
 
@@ -1203,7 +1208,7 @@ run_article() {
 		*'"blocks":[]'*) article_fail "artikel zonder tekst gevonden" ;;
 		esac
 		local reason
-		reason=$(printf '%s' "$art_json" | grep -oP '"reason":"\K[^"]*' | head -1)
+		reason=$(printf '%s' "$art_json" | grep -oP '"reason"\s*:\s*"\K[^"]*' | head -1)
 		article_fail "${reason:-artikelstructuur herkend}"
 	fi
 

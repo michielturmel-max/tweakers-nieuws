@@ -779,18 +779,10 @@ Panel {
   function articleTimeout() {
     if (!(articleMode && articleState === "bezig")) return
     var item = items[articleIndex]
-    var title = (item && item.title) ? item.title : "Artikel niet beschikbaar"
     if (!articleUrl && item) articleUrl = item.url || ""
     pendingArticle = -1
     pendingArticleUrl = ""
-    article = {
-      ok: 0,
-      title: title,
-      author: "",
-      date: "",
-      reacties: "",
-      blocks: [{ t: "p", x: "Het ophalen duurt te lang; de site blokkeert mogelijk de pagina. Open het artikel in de browser.", r: [] }]
-    }
+    article = articleFallback("Het ophalen duurt te lang; de site blokkeert mogelijk de pagina. Open het artikel in de browser.")
     articleState = "fout"
     flick.contentY = 0
   }
@@ -826,6 +818,28 @@ Panel {
       return
     }
     close()
+  }
+
+  // Geen bruikbare tekst (paywall, blokkade of onbekende structuur): toon
+  // de intro uit de feed als die er is, plus de reden en de browserlink.
+  function articleFallback(reason) {
+    var item = items[articleIndex]
+    var lead = (item && item.lead) ? String(item.lead) : ""
+    var blocks = []
+    if (lead !== "") blocks.push({ t: "lead", x: lead, r: [] })
+    blocks.push({
+      t: "p",
+      x: reason || "De tekst van dit artikel kon niet in de plugin worden geladen.",
+      r: []
+    })
+    return {
+      ok: 0,
+      title: (item && item.title) ? String(item.title) : "Artikel niet beschikbaar",
+      author: "",
+      date: "",
+      reacties: "",
+      blocks: blocks
+    }
   }
 
   function applyArticle(raw) {
@@ -864,14 +878,7 @@ Panel {
         var first = text.split("\n")[0] || ""
         reason = first.replace(/^artikel ophalen mislukt:\s*/i, "")
       }
-      article = {
-        ok: 0,
-        title: (items[articleIndex] && items[articleIndex].title) ? items[articleIndex].title : "Artikel niet beschikbaar",
-        author: "",
-        date: "",
-        reacties: "",
-        blocks: [{ t: "p", x: reason || "De tekst van dit artikel kon niet in de plugin worden geladen.", r: [] }]
-      }
+      article = articleFallback(reason)
       articleState = "fout"
       flick.contentY = 0
       return

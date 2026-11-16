@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "tweakers.nieuws",
   "name": "Tweakers Nieuws",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "author": "michiel",
   "license": "MIT",
   "description": "Nieuws uit meerdere bronnen: RSS-feeds, secties van nieuwssites en YouTube-kanalen, in het paneel. Bewaar artikelen in je eigen archief en zoek ze terug",

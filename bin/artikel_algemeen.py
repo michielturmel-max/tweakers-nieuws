@@ -357,6 +357,15 @@ def main():
         print(json.dumps({"ok": 0, "reason": f"kon pagina niet lezen: {e}"}))
         return 1
 
+    raw = data.decode("utf-8", "replace") if isinstance(data, bytes) else data
+
+    # Een betaald artikel levert in de browser alleen de paywall op; de
+    # volledige tekst komt nooit in de HTML. Dat herkennen we hier, zodat het
+    # paneel de intro uit de feed kan tonen in plaats van abonnementsknoppen.
+    premium = bool(re.search(
+        r'"isPremium"\s*:\s*true|"isAccessibleForFree"\s*:\s*false',
+        raw, re.I))
+
     soup = parse_page(data)
 
     title = ""
@@ -411,6 +420,12 @@ def main():
         print(json.dumps({"ok": 0, "reason": "geen artikeltekst"}))
         return 0
     blocks = build_blocks(root)
+
+    if premium and sum(len(b["x"]) for b in blocks) < 800:
+        print(json.dumps({"ok": 0, "premium": 1,
+                          "reason": "premium artikel, alleen leesbaar met een abonnement"},
+                         ensure_ascii=False))
+        return 0
 
     if len(blocks) < 1:
         desc = ""
