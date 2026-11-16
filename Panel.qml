@@ -2200,7 +2200,8 @@ Panel {
                 Text {
                   width: parent.width
                   text: row.modelData.lead
-                  color: Color.muted
+                  color: root.barForeground
+                  opacity: 0.9
                   font.family: root.bar ? root.bar.fontFamily : Style.font.family
                   font.pixelSize: root.captionFont
                   wrapMode: Text.WordWrap
@@ -2468,9 +2469,9 @@ Panel {
 
               color: root.barForeground
               opacity: block.kind === "lead" || block.kind === "h" ? 1
-                : block.kind === "p" ? 0.88
-                : block.kind === "li" ? 0.78
-                : 0.68
+                : block.kind === "p" ? 1
+                : block.kind === "li" ? 0.92
+                : 0.85
 
               font.family: root.bar ? root.bar.fontFamily : Style.font.family
               font.pixelSize: block.kind === "lead" || block.kind === "h" ? root.articleLeadFont : root.articleTextFont
