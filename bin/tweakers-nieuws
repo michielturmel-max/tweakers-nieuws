@@ -128,6 +128,12 @@ fail() {
 	exit 1
 }
 
+# Alleen http(s): een feed of artikelpagina mag geen file:// (of wat dan ook)
+# tegen curl aan kunnen praten, ook niet via een redirect.
+netcurl() {
+	curl --proto '=http,https' --proto-redir '=http,https' "$@"
+}
+
 # ---------------------------------------------------------------- bronnen
 
 # Bij de eerste start schrijven we drie voorbeeldbronnen weg, zodat de widget
@@ -684,7 +690,7 @@ set_source() {
 # geladen kan worden.
 feed_title() {
 	local xml title
-	xml=$(curl -sSL --max-time 15 --compressed \
+	xml=$(netcurl -sSL --max-time 15 --compressed \
 		-A "$UA" -H "Accept: application/rss+xml,application/atom+xml,application/xml" \
 		"$1" 2>/dev/null) || return 0
 	[ -n "$xml" ] || return 0
@@ -726,7 +732,7 @@ channel_title() {
 	handle="${handle#@}"
 	[ -n "$handle" ] || return 0
 	local page title
-	page=$(curl -sSL --max-time 20 --compressed \
+	page=$(netcurl -sSL --max-time 20 --compressed \
 		-A "$UA" -b "CONSENT=YES+" -H "Accept-Language: nl-NL,nl;q=0.9" \
 		"https://www.youtube.com/@$handle" 2>/dev/null) || return 0
 	title=$(printf '%s' "$page" | grep -oP '<title>\K[^<]*' | head -1)
@@ -752,7 +758,7 @@ search_youtube() {
 	# Eerst strikt op kanalen; mist YouTube die filter (gewijzigde opmaak),
 	# dan een gewone zoekpagina waar dezelfde parser nog kanalen uit haalt.
 	for sp in "&sp=EgIQAg%3D%3D" ""; do
-		curl -sSL --max-time 25 --compressed \
+		netcurl -sSL --max-time 25 --compressed \
 			-A "$UA" -b "CONSENT=YES+" -H "Accept-Language: nl-NL,nl;q=0.9" \
 			"https://www.youtube.com/results?search_query=$enc$sp" \
 			-o "$TMP/search.html" 2>/dev/null
@@ -801,7 +807,7 @@ channel_videos() {
 	# proberen we opnieuw; handmatig verversen zit daar al snel tussen.
 	local delayer index
 	for try in 1 2 3 4 5; do
-		curl -sSL --max-time 25 --compressed \
+		netcurl -sSL --max-time 25 --compressed \
 			-A "$UA" -b "CONSENT=YES+" -H "Accept-Language: nl-NL,nl;q=0.9" \
 			"https://www.youtube.com/$vurl/videos" -o "$TMP/page.html" 2>/dev/null
 		# Een pagina van enige kilobytes is óok een schil; alleen een volle
@@ -840,7 +846,7 @@ resolve_youtube() {
 	# YouTube serveert soms eerst een kale schil zonder kanaalgegevens; één
 	# herhaling is daarom geen luxe maar noodzaak.
 	for try in 1 2 3; do
-		curl -sSL --max-time 25 --compressed \
+		netcurl -sSL --max-time 25 --compressed \
 			-A "$UA" -b "CONSENT=YES+" -H "Accept-Language: nl-NL,nl;q=0.9" \
 			"https://www.youtube.com/@$handle" -o "$CACHE_DIR/ytpage.html" 2>/dev/null
 		id=$(grep -oP '"externalId":"\KUC[A-Za-z0-9_-]{22}' "$CACHE_DIR/ytpage.html" 2>/dev/null | head -1)
@@ -885,7 +891,7 @@ trap 'rm -rf "$TMP"' EXIT
 # een paar verzoeken opeens verschijnt. De hele formulier-oplossing zit
 # vol verborgen velden, maar één cookie volstaat: CONSENT=YES+.
 grab_page() {
-	curl -sSL --max-time 25 --compressed \
+	netcurl -sSL --max-time 25 --compressed \
 		-A "$UA" -c "$JAR" -b "$JAR" -b "CONSENT=YES+" \
 		-H "Accept: text/html,application/xhtml+xml" \
 		-H "Accept-Language: nl-NL,nl;q=0.9" \
@@ -910,16 +916,18 @@ resolve_page() {
 				print $u;
 			}
 		' "$TMP/page.html" 2>/dev/null)
-		if [ -n "$confirm" ]; then
+		case "$confirm" in
+		http://* | https://*)
 			grab_page "$confirm" "$1"
 			grab_page "$1" "$1"
-		fi
+			;;
+		esac
 	fi
 
 	# 3) Blijft er een gate staan (consent.js-variant zoals nu.nl), dan één
 	#    poging als zoekmachine: DPG serveert het artikel aan bots.
 	if gate_left; then
-		curl -sSL --max-time 30 --compressed \
+		netcurl -sSL --max-time 30 --compressed \
 			-A "$BOT_UA" -b "CONSENT=YES+" \
 			-H "Accept-Language: nl-NL,nl;q=0.9" \
 			-e "$1" -o "$TMP/page.html" "$1" 2>/dev/null
@@ -938,7 +946,7 @@ gate_left() {
 }
 
 grab_feed() {
-	curl -sSL --max-time 25 --compressed \
+	netcurl -sSL --max-time 25 --compressed \
 		-A "$UA" \
 		-H "Accept: application/rss+xml,application/atom+xml,application/xml" \
 		-e "https://www.tweakers.net/" \
@@ -1122,7 +1130,7 @@ video_article() {
 	local out try delayer
 	out=""
 	for try in 1 2 3 4 5; do
-		curl -sSL --max-time 25 --compressed \
+		netcurl -sSL --max-time 25 --compressed \
 			-A "$UA" -b "CONSENT=YES+" -H "Accept-Language: nl-NL,nl;q=0.9" \
 			"https://www.youtube.com/watch?v=$vid" -o "$TMP/page.html" 2>/dev/null
 		[ -s "$TMP/page.html" ] || { sleep 1; continue; }
@@ -1222,7 +1230,7 @@ run_article() {
 	# Dat is een derde partij: daarom pas na de lokale browser.
 	proxy_render() {
 		local url="$1"
-		curl -sSL --max-time 45 --compressed \
+		netcurl -sSL --max-time 45 --compressed \
 			-H "x-target-selector: article" \
 			-H "x-return-format: html" \
 			-o "$TMP/proxy.html" "https://r.jina.ai/$url" 2>/dev/null || return 1

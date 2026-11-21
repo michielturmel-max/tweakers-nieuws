@@ -53,7 +53,7 @@ De eerste keer staan er drie voorbeeldbronnen in; pas ze aan via het hamburgerme
 
 Je bronlijst (`sources.json`) en je artikelarchief blijven bij een update bewaard; de oude installatie gaat eerst naar `~/.config/omarchy/plugin-backups/`.
 
-Start na elke update de shell opnieuw met `omarchy-restart-shell` (of log even uit en in). Quickshell houdt soms de oude QML in het geheugen: Omarchy toont dan al de nieuwe versie, terwijl het paneel nog de oude bediening en opmaak laat zien.
+`install.sh` start de shell zelf opnieuw na een installatie of update, zodat de nieuwe paneelcode echt geladen wordt. Lukt dat niet (bijvoorbeeld bij een vergrendeld scherm), draai dan zelf `omarchy-restart-shell`: Quickshell houdt anders soms de oude QML in het geheugen, waarbij Omarchy al de nieuwe versie toont maar het paneel nog de oude bediening laat zien.
 
 **Zip of installatie via `./install.sh install`:** download de nieuwste `tweakers.nieuws-<versie>.zip` uit [Releases](https://github.com/michielturmel-max/tweakers-nieuws/releases), pak hem uit en voer in de uitgepakte map uit:
 

@@ -166,7 +166,20 @@ install() {
     info "ingeschakeld in het midden van de bar"
   fi
 
-  say "[5/5] Klaar"
+  # Zonder herstart houdt Quickshell soms de oude QML in het geheugen: de
+  # versie klopt dan al, maar de paneelcode is nog van de vorige installatie.
+  say "[5/5] Shell opnieuw starten"
+  if command -v omarchy-restart-shell >/dev/null 2>&1; then
+    if omarchy-restart-shell; then
+      info "shell opnieuw gestart; het paneel laadt nu de nieuwe code"
+    else
+      info "shell kon niet opnieuw starten (scherm vergrendeld?); draai zelf: omarchy-restart-shell"
+    fi
+  else
+    info "draai zelf: omarchy-restart-shell"
+  fi
+
+  say "Klaar"
   info "Klik op het Nieuws-icoontje in de bar om het paneel te openen."
   info "Bekijk versies met: ./install.sh version"
   info "Verwijderen doe je met: ./install.sh uninstall"

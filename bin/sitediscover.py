@@ -40,6 +40,7 @@ def get(url, timeout=10):
     p = subprocess.run(
         [
             "curl", "-sSL", "--compressed", "--max-time", str(timeout),
+            "--proto", "=http,https", "--proto-redir", "=http,https",
             "-A", UA, "-b", "CONSENT=YES+", "-H", "Accept-Language: nl-NL,nl;q=0.9",
             url,
         ],

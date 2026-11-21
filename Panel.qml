@@ -687,8 +687,8 @@ Panel {
 
   function openArticle(index) {
     var item = items[index]
-    if (item && item.url) { Qt.openUrlExternally(item.url); return }
-    if (articleUrl) Qt.openUrlExternally(articleUrl)
+    var url = root.safeHttp(item && item.url) || root.safeHttp(articleUrl)
+    if (url) Qt.openUrlExternally(url)
   }
 
   // Toont de volledige tekst van een artikel in het paneel. Sluit het paneel
@@ -808,9 +808,8 @@ Panel {
   // Zelfde artikel, maar in de browser in plaats van in het paneel.
   function openArchiveExternal(i) {
     var r = archiveResults[i]
-    if (!r || !r.url) return
-    if (root.bar) root.bar.run("omarchy-launch-browser " + r.url)
-    else Qt.openUrlExternally(r.url)
+    if (!r) return
+    root.openSite(r.url)
   }
 
   // Als een site tot de curl-limiet van het script blijft hangen, moet het
@@ -929,6 +928,25 @@ Panel {
     flick.contentY = 0
   }
 
+  // Alleen http(s) naar buiten: een feed of artikelpagina mag geen file:// of
+  // ander schema bij de browser of de shell krijgen.
+  function safeHttp(u) {
+    var s = String(u === undefined || u === null ? "" : u)
+    return /^https?:\/\/[^\s<>"']+$/i.test(s) ? s : ""
+  }
+
+  // bar.run gaat via bash -lc; quote dus alles wat uit een feed of artikel komt.
+  function shquote(s) {
+    return "'" + String(s === undefined || s === null ? "" : s).replace(/'/g, "'\\''") + "'"
+  }
+
+  function openSite(u) {
+    var url = root.safeHttp(u)
+    if (!url) return
+    if (root.bar) root.bar.run("omarchy-launch-browser " + root.shquote(url))
+    else Qt.openUrlExternally(url)
+  }
+
   // Tekst uit het script is platte tekst; voor de klikbare bronlinks bouwen we
   // er StyledText van. Het escapen gebeurt hier en niet in het script, zodat
   // de ontsnappingen bij de tekst blijven waar ze thuishoren.
@@ -946,10 +964,11 @@ Panel {
     for (var i = 0; i < runs.length; i++) {
       var r = runs[i] || {}
       var t = esc(r.x)
-      if (r.h) {
+      var h = root.safeHttp(r.h)
+      if (h) {
         // Onderstreept in plaats van een andere kleur: dit thema heeft geen
         // linkkleur, en `accent` is hier dezelfde tint als de voorgrond.
-        out += '<a href="' + esc(r.h) + '"><u>' + t + "</u></a>"
+        out += '<a href="' + esc(h) + '"><u>' + t + "</u></a>"
       } else {
         out += t
       }
@@ -1062,6 +1081,30 @@ Panel {
     onTriggered: root.pollKops()
   }
 
+  // Quickshell houdt de geladen QML in het geheugen, ook als een update de
+  // bestanden al vervangen heeft. Een gewijzigde manifest.json betekent een
+  // nieuwe versie: start de shell dan opnieuw, ook bij `omarchy plugin update`
+  // (dat install.sh niet aanroept). De wachter schiet pas na de eerste seconden
+  // scherp, zodat de eigen eerste load geen herstart veroorzaakt.
+  property bool updateWatchArmed: false
+
+  FileView {
+    path: Quickshell.env("HOME") + "/.config/omarchy/plugins/tweakers.nieuws/manifest.json"
+    watchChanges: true
+    printErrors: false
+    onFileChanged: {
+      if (!root.updateWatchArmed) return
+      Util.execDetached("omarchy-restart-shell")
+    }
+  }
+
+  Timer {
+    interval: 3000
+    repeat: false
+    onTriggered: root.updateWatchArmed = true
+    Component.onCompleted: start()
+  }
+
   Component.onCompleted: {
     prikStartTimer.start()
     prikTimer.start()
@@ -1153,9 +1196,7 @@ Panel {
         return
       }
       if (b === Qt.RightButton) {
-        if (root.bar && root.activeSource && root.activeSource.site) {
-          root.bar.run("omarchy-launch-browser " + root.activeSource.site)
-        }
+        if (root.activeSource) root.openSite(root.activeSource.site)
         return
       }
       root.toggle()
@@ -1275,9 +1316,7 @@ Panel {
           return
         }
         if (t === "o" || t === "O") {
-          if (root.bar && root.activeSource && root.activeSource.site) {
-            root.bar.run("omarchy-launch-browser " + root.activeSource.site)
-          }
+          if (root.activeSource) root.openSite(root.activeSource.site)
           return
         }
         if (t === "e" || t === "E") {
@@ -2413,7 +2452,8 @@ Panel {
                   hoverEnabled: true
                   cursorShape: Qt.PointingHandCursor
                   onClicked: {
-                    if (row.modelData.url) Qt.openUrlExternally(row.modelData.url)
+                    var u = root.safeHttp(row.modelData.url)
+                    if (u) Qt.openUrlExternally(u)
                   }
                 }
               }
@@ -2672,7 +2712,10 @@ Panel {
             MouseArea {
               anchors.fill: parent
               cursorShape: Qt.PointingHandCursor
-              onClicked: Qt.openUrlExternally(root.articleUrl)
+              onClicked: {
+                var u = root.safeHttp(root.articleUrl)
+                if (u) Qt.openUrlExternally(u)
+              }
             }
           }
 
@@ -2701,7 +2744,8 @@ Panel {
               }
 
               onLinkActivated: function(href) {
-                if (href) Qt.openUrlExternally(href)
+                var u = root.safeHttp(href)
+                if (u) Qt.openUrlExternally(u)
               }
 
               color: root.barForeground
