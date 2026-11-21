@@ -49,7 +49,32 @@ omarchy plugin enable tweakers.nieuws
 
 De eerste keer staan er drie voorbeeldbronnen in; pas ze aan via het hamburgermenu (☰). Je eigen bronlijst staat in `~/.config/omarchy/plugins/tweakers.nieuws/sources.json` en blijft bij een update bewaard.
 
-`./install.sh` kent ook `update`, `version`, `uninstall` en `help`; `./install.sh help` toont de opties. Bij een zip-update pak je de nieuwe zip uit en draai je opnieuw `./install.sh install`.
+## Bijwerken
+
+Je bronlijst (`sources.json`) en je artikelarchief blijven bij een update bewaard; de oude installatie gaat eerst naar `~/.config/omarchy/plugin-backups/`.
+
+**Zip of installatie via `./install.sh install`:** download de nieuwste `tweakers.nieuws-<versie>.zip` uit [Releases](https://github.com/michielturmel-max/tweakers-nieuws/releases), pak hem uit en voer in de uitgepakte map uit:
+
+```sh
+./install.sh update
+```
+
+`update` installeert alleen als de geïnstalleerde versie ouder is. Met `./install.sh version` zie je de gebundelde en de geïnstalleerde versie; `./install.sh install` overschrijft altijd.
+
+**Git-clone:**
+
+```sh
+git pull
+./install.sh update
+```
+
+**Geïnstalleerd via `omarchy plugin add`:** die installatie beheert Omarchy zelf als git-plugin; werk hem bij met:
+
+```sh
+omarchy plugin update tweakers.nieuws
+```
+
+`./install.sh help` toont alle opties, waaronder `uninstall`.
 
 ## Bediening
 
