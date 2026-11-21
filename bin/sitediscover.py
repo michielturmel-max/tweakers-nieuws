@@ -6,6 +6,7 @@ vult aan met gangbare feedpaden, en zet bij elke gevonden feed een paar eerste
 koppen als voorproefje. Geen sitemagie per krant: alle heuristieken zijn
 algemeen, zodat het op zoveel mogelijk sites werkt. Compacte JSON.
 """
+import html as htmlmod
 import json
 import re
 import subprocess
@@ -168,13 +169,44 @@ def channel_title(body):
 def section_label(title):
     # Nette naam uit de eigen feed-titel: "AD:buitenland", "NU - Buitenland",
     # "NOS Buitenland" en "TR: economie" worden allemaal gewoon "Buitenland".
-    t = re.sub(r"^(?:AD|TR|VK|PP|NU|NOS|FD)\b\s*(?:[:|\-–—]\s*)?", "", title, flags=re.I).strip()
+    t = htmlmod.unescape(title or "")
+    t = re.sub(r"^(?:AD|TR|VK|PP|NU|NOS|FD)\b\s*(?:[:|\-–—]\s*)?", "", t, flags=re.I).strip()
+    t = re.sub(r"\s*[-|–—]\s*[\w .&+-]+\.(?:nl|com|be|net|org)\s*$", "", t, flags=re.I).strip()
     if not t:
         t = title
-    return t[:40].title() or "sectie"
+    return t[:40].rstrip(" -|–—").title() or "sectie"
 
 
-def discover_sections(root_url, root_body, home):
+SECTION_PREFIXES = (
+    "nieuws", "categorie", "category", "categories", "sectie",
+    "secties", "rubrieken", "topics", "topic", "tag",
+)
+
+
+def html_section_links(html, base):
+    """Sectiepaden uit de homepage, bv. /nieuws/astronomie-ruimtevaart/."""
+    if not html:
+        return []
+    if isinstance(html, bytes):
+        html = html.decode("utf-8", "replace")
+    host = urllib.parse.urlsplit(base).netloc
+    out, seen = [], set()
+    for href in re.findall(r"""href=["']([^"']+)["']""", html, re.I):
+        p = urllib.parse.urlsplit(urllib.parse.urljoin(base, href))
+        parts = [x for x in p.path.split("/") if x]
+        if p.netloc != host or len(parts) != 2 or parts[0].lower() not in SECTION_PREFIXES:
+            continue
+        sec = "%s://%s/%s/%s/" % (p.scheme or "https", p.netloc, parts[0], parts[1])
+        if sec in seen:
+            continue
+        seen.add(sec)
+        out.append(sec)
+        if len(out) >= 10:
+            break
+    return out
+
+
+def discover_sections(root_url, root_body, home, home_html=""):
     """Sectie-feeds naast een hoofdfeed zoeken, zonder sitespecifieke logica.
 
     De url-opbouw volgt de 'familie' die de hoofdfeed verraadt: DPG-sites
@@ -201,6 +233,12 @@ def discover_sections(root_url, root_body, home):
     else:
         cands = ["%s/%s/rss.xml" % (home, s) for s in SECTIONS]
         cands += ["%s/rss/%s" % (home, s) for s in SECTIONS]
+
+    # Secties die de homepage zelf linkt (WordPress en o.a. Scientias:
+    # /nieuws/astronomie-ruimtevaart/feed/) zijn beter dan geraden paden.
+    for sec in html_section_links(home_html, home):
+        cands.append(sec + "feed/")
+        cands.append(sec + "rss")
 
     root_samples = tuple(feed_samples(root_body))
     out, seen_key = [], set()
@@ -304,9 +342,12 @@ def main():
     if parsed.path in ("", "/"):
         root_parsed = urllib.parse.urlsplit(results[0]["value"])
         root_body = get(results[0]["value"])
+        home_html = ""
+        if isinstance(body, bytes) and not looks_like_feed(body):
+            home_html = body.decode("utf-8", "replace")
         if root_body and looks_like_feed(root_body):
             for s in discover_sections(
-                results[0]["value"], root_body, "https://" + root_parsed.netloc
+                results[0]["value"], root_body, "https://" + root_parsed.netloc, home_html
             ):
                 key = s["shape"]
                 if key in seen_key:
